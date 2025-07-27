@@ -18,7 +18,7 @@ def download(source_url: str, destination_path: str) -> None:
     """
     Downloads a file from the provided source URL to the specified destination path
     only if the file doesn't already exist at the destination.
-    
+
     Args:
         source_url (str): The URL of the file to download.
         destination_path (str): The local path where the file should be saved.
@@ -31,10 +31,10 @@ def download(source_url: str, destination_path: str) -> None:
 def get_dataset_fn(dataset_name: str) -> str:
     """
     Returns the full file path for a given dataset name in the data directory.
-    
+
     Args:
         dataset_name (str): The name of the dataset.
-    
+
     Returns:
         str: The full file path of the dataset.
     """
@@ -46,12 +46,12 @@ def get_dataset_fn(dataset_name: str) -> str:
 def get_dataset(dataset_name: str) -> Tuple[h5py.File, int]:
     """
     Fetches a dataset by downloading it from a known URL or creating it locally
-    if it's not already present. The dataset file is then opened for reading, 
+    if it's not already present. The dataset file is then opened for reading,
     and the file handle and the dimension of the dataset are returned.
-    
+
     Args:
         dataset_name (str): The name of the dataset.
-    
+
     Returns:
         Tuple[h5py.File, int]: A tuple containing the opened HDF5 file object and
             the dimension of the dataset.
@@ -77,17 +77,17 @@ def get_dataset(dataset_name: str) -> Tuple[h5py.File, int]:
 
 def write_output(train: numpy.ndarray, test: numpy.ndarray, fn: str, distance: str, point_type: str = "float", count: int = 100) -> None:
     """
-    Writes the provided training and testing data to an HDF5 file. It also computes 
-    and stores the nearest neighbors and their distances for the test set using a 
+    Writes the provided training and testing data to an HDF5 file. It also computes
+    and stores the nearest neighbors and their distances for the test set using a
     brute-force approach.
-    
+
     Args:
         train (numpy.ndarray): The training data.
         test (numpy.ndarray): The testing data.
         filename (str): The name of the HDF5 file to which data should be written.
         distance_metric (str): The distance metric to use for computing nearest neighbors.
         point_type (str, optional): The type of the data points. Defaults to "float".
-        neighbors_count (int, optional): The number of nearest neighbors to compute for 
+        neighbors_count (int, optional): The number of nearest neighbors to compute for
             each point in the test set. Defaults to 100.
     """
     from ann_benchmarks.algorithms.bruteforce.module import BruteForceBLAS
@@ -130,17 +130,17 @@ param: train and test are arrays of arrays of indices.
 
 def write_sparse_output(train: numpy.ndarray, test: numpy.ndarray, fn: str, distance: str, dimension: int, count: int = 100) -> None:
     """
-    Writes the provided sparse training and testing data to an HDF5 file. It also computes 
-    and stores the nearest neighbors and their distances for the test set using a 
+    Writes the provided sparse training and testing data to an HDF5 file. It also computes
+    and stores the nearest neighbors and their distances for the test set using a
     brute-force approach.
-    
+
     Args:
         train (numpy.ndarray): The sparse training data.
         test (numpy.ndarray): The sparse testing data.
         filename (str): The name of the HDF5 file to which data should be written.
         distance_metric (str): The distance metric to use for computing nearest neighbors.
         dimension (int): The dimensionality of the data.
-        neighbors_count (int, optional): The number of nearest neighbors to compute for 
+        neighbors_count (int, optional): The number of nearest neighbors to compute for
             each point in the test set. Defaults to 100.
     """
     from ann_benchmarks.algorithms.bruteforce.module import BruteForceBLAS
@@ -190,12 +190,12 @@ def write_sparse_output(train: numpy.ndarray, test: numpy.ndarray, fn: str, dist
 def train_test_split(X: numpy.ndarray, test_size: int = 10000, dimension: int = None) -> Tuple[numpy.ndarray, numpy.ndarray]:
     """
     Splits the provided dataset into a training set and a testing set.
-    
+
     Args:
         X (numpy.ndarray): The dataset to split.
-        test_size (int, optional): The number of samples to include in the test set. 
+        test_size (int, optional): The number of samples to include in the test set.
             Defaults to 10000.
-        dimension (int, optional): The dimensionality of the data. If not provided, 
+        dimension (int, optional): The dimensionality of the data. If not provided,
             it will be inferred from the second dimension of X. Defaults to None.
 
     Returns:
@@ -597,6 +597,54 @@ def coco(out_fn: str, kind: str):
     write_output(X_train, X_test, out_fn, "angular")
 
 
+# taken from timescale fork of ann-benchmarks
+def cohere_wikipedia_22_12(out_fn, n, test_size, distance):
+    from sklearn.model_selection import train_test_split
+    from datasets import load_dataset, concatenate_datasets
+    srcs = [
+        "Cohere/wikipedia-22-12-en-embeddings",
+        "Cohere/wikipedia-22-12-simple-embeddings",
+        "Cohere/wikipedia-22-12-de-embeddings",
+        "Cohere/wikipedia-22-12-fr-embeddings",
+        "Cohere/wikipedia-22-12-es-embeddings",
+        "Cohere/wikipedia-22-12-it-embeddings",
+        "Cohere/wikipedia-22-12-ja-embeddings",
+        "Cohere/wikipedia-22-12-ar-embeddings",
+        "Cohere/wikipedia-22-12-zh-embeddings",
+        "Cohere/wikipedia-22-12-ko-embeddings",
+        "Cohere/wikipedia-22-12-hi-embeddings"
+    ]
+    target = n + test_size
+    running_total = 0
+    datasets = []
+    for src in srcs:
+        if running_total >= target:
+            break
+        print(f"loading dataset: {src}")
+        ds = load_dataset(src, split="train")
+        ds.set_format(type="numpy", columns=["emb"])
+        count = ds.shape[0]
+        print(f"{count} embeddings in dataset")
+        if running_total + count > target:
+            count = target - running_total
+            print(f"full dataset not required. selecting {count}")
+            ds = ds.select(range(count))
+            count = ds.shape[0]
+            print(f"{count} embeddings selected")
+        datasets.append(ds)
+        running_total += count
+        print(f"running total: {running_total}")
+    ds = datasets[0] if len(datasets) == 1 else concatenate_datasets(datasets)
+    print(f"final dataset size: {ds.shape[0]}")
+    print("splitting training/testing sets...")
+    train, test = train_test_split(ds, test_size=int(test_size), random_state=42)
+    train = train["emb"]
+    test = test["emb"]
+    print(f"writing output...")
+    write_output(train, test, out_fn, distance)
+    print("done")
+
+
 DATASETS: Dict[str, Callable[[str], None]] = {
     "deep-image-96-angular": deep_image,
     "fashion-mnist-784-euclidean": fashion_mnist,
@@ -627,6 +675,17 @@ DATASETS: Dict[str, Callable[[str], None]] = {
     "movielens20m-jaccard": movielens20m,
     "coco-i2i-512-angular": lambda out_fn: coco(out_fn, "i2i"),
     "coco-t2i-512-angular": lambda out_fn: coco(out_fn, "t2i"),
+    "cohere-wikipedia-22-12-10k-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 10_000, 100, "angular"),
+    "cohere-wikipedia-22-12-30k-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 30_000, 100, "angular"),
+    "cohere-wikipedia-22-12-100k-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 100_000, 1000, "angular"),
+    "cohere-wikipedia-22-12-500k-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 500_000, 5000, "angular"),
+    "cohere-wikipedia-22-12-1M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 1_000_000, 10_000, "angular"),
+    "cohere-wikipedia-22-12-5M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 5_000_000, 10_000, "angular"),
+    "cohere-wikipedia-22-12-10M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 10_000_000, 5_000, "angular"),
+    "cohere-wikipedia-22-12-20M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 20_000_000, 1_000, "angular"),
+    "cohere-wikipedia-22-12-40M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 40_000_000, 1_000, "angular"),
+    "cohere-wikipedia-22-12-50M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 50_000_000, 1_000, "angular"),
+    "cohere-wikipedia-22-12-100M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 100_000_000, 10_000, "angular"),
 }
 
 DATASETS.update({
