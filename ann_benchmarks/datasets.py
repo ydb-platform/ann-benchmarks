@@ -636,10 +636,10 @@ def cohere_wikipedia_22_12(out_fn, n, test_size, distance):
         print(f"running total: {running_total}")
     ds = datasets[0] if len(datasets) == 1 else concatenate_datasets(datasets)
     print(f"final dataset size: {ds.shape[0]}")
+    print("extracting embeddings...")
+    embeddings = ds["emb"]
     print("splitting training/testing sets...")
-    train, test = train_test_split(ds, test_size=int(test_size), random_state=42)
-    train = train["emb"]
-    test = test["emb"]
+    train, test = train_test_split(embeddings, test_size=int(test_size), random_state=42)
     print(f"writing output...")
     write_output(train, test, out_fn, distance)
     print("done")
