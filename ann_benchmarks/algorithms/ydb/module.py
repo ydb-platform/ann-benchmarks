@@ -29,14 +29,13 @@ INDEX_NAME = "idx_vector_items"
 
 MIN_SHARDS = 10
 
-LEVELS = 3
-CLUSTERS = 200
-
 BATCH_SIZE = 1000
 
 MAX_RETRIES = 100
 BACKOFF_MILLIS = 10
 BACKOFF_CEILING = 5
+
+DEFAULT_MEANS_TOP_SIZE = 3
 
 
 def get_backoff_wait_ms(retry_count):
@@ -134,7 +133,7 @@ def build_index(session, endpoint, database, table_name, index_name, num_dimensi
         GLOBAL USING vector_kmeans_tree
         ON (embedding)
         WITH (
-            similarity=inner_product,
+            distance="cosine",
             vector_type="float",
             vector_dimension={num_dimensions},
             levels={levels},
@@ -287,7 +286,7 @@ def send_batch_to_ydb(table_client, full_table_path, embeddings):
 
 
 class YDBVector(BaseANN):
-    def __init__(self, metric, method_param=None):
+    def __init__(self, metric, method_param):
         # Check if ydb CLI is available before proceeding
         check_ydb_cli_available()
 
@@ -316,6 +315,8 @@ class YDBVector(BaseANN):
         self.database = query_params['database'][0]
 
         self.full_table_path = self.database + "/" + TABLE_NAME
+
+        self.means_top_size = DEFAULT_MEANS_TOP_SIZE
 
 
     def fit(self, X):
@@ -353,8 +354,8 @@ class YDBVector(BaseANN):
             TABLE_NAME,
             INDEX_NAME,
             num_dimensions,
-            LEVELS,
-            CLUSTERS)
+            self._method_param['levels'],
+            self._method_param['clusters'])
 
         index_elapsed_time_sec = time.time() - index_start_time_sec
         print("built index in {:.3f} seconds".format(index_elapsed_time_sec))
@@ -364,13 +365,15 @@ class YDBVector(BaseANN):
         query = f"""
             PRAGMA TablePathPrefix("{self.database}");
 
+            pragma ydb.KMeansTreeSearchTopSize = "{self.means_top_size}";
+
             DECLARE $embedding_list as List<Float>;
             $TargetEmbedding = Knn::ToBinaryStringFloat($embedding_list);
 
-            SELECT id, Knn::InnerProductSimilarity(embedding, $TargetEmbedding) as dist
+            SELECT id, Knn::CosineDistance(embedding, $TargetEmbedding) as dist
             FROM `{TABLE_NAME}`
             VIEW `{INDEX_NAME}`
-            ORDER BY dist DESC
+            ORDER BY dist ASC
             LIMIT {n};
         """
 
@@ -386,12 +389,8 @@ class YDBVector(BaseANN):
             raise e
 
 
-    def set_query_arguments(self, *args):
-        # Store query arguments for later use
-        if args:
-            self._query_args = args[0] if len(args) == 1 else args
-        else:
-            self._query_args = None
+    def set_query_arguments(self, means_top_size):
+        self.means_top_size = means_top_size
 
     def get_memory_usage(self):
         # TODO: Implement memory usage calculation
