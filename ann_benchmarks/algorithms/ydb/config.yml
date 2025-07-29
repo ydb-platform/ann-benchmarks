@@ -1,0 +1,13 @@
+float:
+  any:
+  - base_args: ['@metric']
+    constructor: YDBVector
+    disabled: false
+    docker_tag: ann-benchmarks-ydb
+    module: ann_benchmarks.algorithms.ydb
+    name: ydb
+    run_groups:
+      default:
+        arg_groups: [{}]
+        args: {}
+        query_args: [[10, 50, 100]]
