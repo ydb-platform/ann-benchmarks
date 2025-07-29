@@ -27,6 +27,8 @@ from ..base.module import BaseANN
 TABLE_NAME = "items"
 INDEX_NAME = "idx_vector_items"
 
+MIN_SHARDS = 10
+
 LEVELS = 3
 CLUSTERS = 200
 
@@ -64,7 +66,7 @@ def check_ydb_cli_available():
         raise RuntimeError("ydb CLI binary not found in PATH. Please install YDB CLI: https://ydb.tech/docs/en/reference/ydb-cli/install")
 
 
-def drop_create_table(session, table_name, dimensions):
+def drop_create_table(session, table_name, dimensions, n):
     """Drop and create YDB table"""
 
     try:
@@ -72,12 +74,44 @@ def drop_create_table(session, table_name, dimensions):
     except:
         pass
 
+    approximate_row_size_bytes = 32 + 4 * dimensions
+    approximate_total_size = approximate_row_size_bytes * n
+
+    # suppose 2 GB shards
+    shard_count_by_size = (approximate_total_size >> 31)
+    shard_count = max(shard_count_by_size, MIN_SHARDS)
+
+    rows_per_shard = n // shard_count
+    cur_row = rows_per_shard
+    split_keys = []
+    while cur_row < n:
+        split_keys.append(str(cur_row))
+        cur_row += rows_per_shard
+
+    if len(split_keys) == 0:
+        split_keys_str = ""
+        min_partitions = MIN_SHARDS
+    else:
+        split_keys = [str(int(x)) for x in split_keys]
+        split_keys_str = ",PARTITION_AT_KEYS = (" + ",".join(split_keys) + ")"
+        min_partitions = max(MIN_SHARDS, len(split_keys) + 1)
+
+    max_partitions = min_partitions * 4
+
+    print(f"Creating table for {n} vectors of {dimensions} dimensions with {min_partitions} shards")
+
     query = f"""
         CREATE TABLE `{table_name}` (
             `id` Uint64,
             `embedding` String,
             PRIMARY KEY (`id`)
         )
+        WITH (
+            AUTO_PARTITIONING_BY_LOAD = DISABLED,
+            AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_partitions},
+            AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_partitions}
+            {split_keys_str}
+        );
     """
 
     try:
@@ -287,7 +321,7 @@ class YDBVector(BaseANN):
     def fit(self, X):
         num_dimensions = X.shape[1]
 
-        drop_create_table(self.driver.table_client.session().create(), TABLE_NAME, num_dimensions)
+        drop_create_table(self.driver.table_client.session().create(), TABLE_NAME, num_dimensions, len(X))
 
         print("copying data...")
         sys.stdout.flush()
