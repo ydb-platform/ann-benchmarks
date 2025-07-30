@@ -41,6 +41,12 @@ pip3 install ydb
 
 Make sure `ydb` CLI is in PATH.
 
+# Configuration
+
+Configuration is stored in `ann_benchmarks/algorithms/{ydb,pgvector}/config.yml`. You can configure:
+* a number of configurations to run
+* clusters, levels, kMeansTreeSearchTopSize, etc
+
 # Running pgvector
 
 ```
