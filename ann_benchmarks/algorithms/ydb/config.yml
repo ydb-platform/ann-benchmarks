@@ -10,11 +10,11 @@ float:
       C100-l3:
         arg_groups: [{clusters: 100, levels: 3}]
         args: {}
-        query_args: [[40, 80]]
+        query_args: [[5, 10, 20, 40]]
       C200-l3:
         arg_groups: [{clusters: 200, levels: 3}]
         args: {}
-        query_args: [[80, 120]]
+        query_args: [[40, 80, 120]]
       C400-l3:
         arg_groups: [{clusters: 400, levels: 3}]
         args: {}
@@ -22,4 +22,4 @@ float:
       C800-l3:
         arg_groups: [{clusters: 800, levels: 3}]
         args: {}
-        query_args: [[200, 400]]
+        query_args: [[100, 200, 400]]
