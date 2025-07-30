@@ -134,7 +134,7 @@ def build_index(session, endpoint, database, table_name, index_name, num_dimensi
         ALTER TABLE `{table_path}`
         ADD INDEX `{index_name}`
         GLOBAL USING vector_kmeans_tree
-        ON (embedding)
+        ON (embedding) COVER (embedding)
         WITH (
             distance="cosine",
             vector_type="float",
