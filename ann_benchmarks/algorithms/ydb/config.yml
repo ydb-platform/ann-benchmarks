@@ -7,67 +7,19 @@ float:
     module: ann_benchmarks.algorithms.ydb
     name: ydb
     run_groups:
-      C100-l1:
-        arg_groups: [{clusters: 100, levels: 1}]
-        args: {}
-        query_args: [[10, 20, 40, 80]]
-      C100-l2:
-        arg_groups: [{clusters: 100, levels: 2}]
-        args: {}
-        query_args: [[10, 20, 40, 80]]
       C100-l3:
         arg_groups: [{clusters: 100, levels: 3}]
         args: {}
-        query_args: [[10, 20, 40, 80]]
-      C100-l4:
-        arg_groups: [{clusters: 100, levels: 4}]
-        args: {}
-        query_args: [[10, 20, 40, 80]]
-      C200-l1:
-        arg_groups: [{clusters: 200, levels: 1}]
-        args: {}
-        query_args: [[10, 20, 40, 80, 120]]
-      C200-l2:
-        arg_groups: [{clusters: 200, levels: 2}]
-        args: {}
-        query_args: [[10, 20, 40, 80, 120]]
+        query_args: [[40, 80]]
       C200-l3:
         arg_groups: [{clusters: 200, levels: 3}]
         args: {}
-        query_args: [[10, 20, 40, 80, 120]]
-      C200-l4:
-        arg_groups: [{clusters: 200, levels: 4}]
-        args: {}
-        query_args: [[10, 20, 40, 80, 120]]
-      C400-l1:
-        arg_groups: [{clusters: 400, levels: 1}]
-        args: {}
-        query_args: [[10, 20, 40, 80, 120, 200]]
-      C400-l2:
-        arg_groups: [{clusters: 400, levels: 2}]
-        args: {}
-        query_args: [[10, 20, 40, 80, 120, 200]]
+        query_args: [[80, 120]]
       C400-l3:
         arg_groups: [{clusters: 400, levels: 3}]
         args: {}
-        query_args: [[10, 20, 40, 80, 120, 200]]
-      C400-l4:
-        arg_groups: [{clusters: 400, levels: 4}]
-        args: {}
-        query_args: [[10, 20, 40, 80, 120, 200]]
-      C800-l1:
-        arg_groups: [{clusters: 800, levels: 1}]
-        args: {}
-        query_args: [[10, 20, 40, 80, 120, 200, 400]]
-      C800-l2:
-        arg_groups: [{clusters: 800, levels: 2}]
-        args: {}
-        query_args: [[10, 20, 40, 80, 120, 200, 400]]
+        query_args: [[120, 200]]
       C800-l3:
         arg_groups: [{clusters: 800, levels: 3}]
         args: {}
-        query_args: [[10, 20, 40, 80, 120, 200, 400]]
-      C800-l4:
-        arg_groups: [{clusters: 800, levels: 4}]
-        args: {}
-        query_args: [[10, 20, 40, 80, 120, 200, 400]]
+        query_args: [[200, 400]]

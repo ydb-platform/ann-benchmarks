@@ -27,7 +27,7 @@ from ..base.module import BaseANN
 TABLE_NAME = "items"
 INDEX_NAME = "idx_vector_items"
 
-MIN_SHARDS = 10
+MIN_SHARDS = 100
 
 BATCH_SIZE = 1000
 
@@ -36,6 +36,8 @@ BACKOFF_MILLIS = 10
 BACKOFF_CEILING = 5
 
 DEFAULT_MEANS_TOP_SIZE = 3
+
+MAX_BATCH_QUERY_THREADS = 32
 
 
 def get_backoff_wait_ms(retry_count):
@@ -78,6 +80,7 @@ def drop_create_table(session, table_name, dimensions, n):
 
     # suppose 2 GB shards
     shard_count_by_size = (approximate_total_size >> 31)
+
     shard_count = max(shard_count_by_size, MIN_SHARDS)
 
     rows_per_shard = n // shard_count
@@ -290,6 +293,8 @@ class YDBVector(BaseANN):
         # Check if ydb CLI is available before proceeding
         check_ydb_cli_available()
 
+        self.batch_threads = None
+
         self._metric = metric
         if method_param is None:
             method_param = {}
@@ -297,6 +302,7 @@ class YDBVector(BaseANN):
 
         try:
             self.driver = initialize_ydb_from_env()
+            self.pool = ydb.QuerySessionPool(self.driver)
         except Exception as e:
             print("Unable to connect to YDB: ", e)
             raise e
@@ -361,6 +367,10 @@ class YDBVector(BaseANN):
         print("built index in {:.3f} seconds".format(index_elapsed_time_sec))
 
     def query(self, v, n):
+        return self.query_impl(v, n)[0]
+
+    def query_impl(self, v, n):
+        start = time.perf_counter()
         binary_embedding = float_embedding_to_binary(v)
         query = f"""
             PRAGMA TablePathPrefix("{self.database}");
@@ -378,16 +388,50 @@ class YDBVector(BaseANN):
         """
 
         try:
-            session = self.driver.table_client.session().create()
-            select_query = session.prepare(query)
-            result_sets = session.transaction().execute(select_query, {"$embedding_list": v})
+            result_sets = self.pool.execute_with_retries(
+                query,
+                {
+                    "$embedding_list": (v, ydb.ListType(ydb.PrimitiveType.Float)),
+                },
+            )
+
             rows = result_sets[0].rows
             ids = [row.id for row in rows]
-            return ids
+            elapsed = time.perf_counter() - start
+            return ids, elapsed
         except Exception as e:
             print("Query failed: ", e)
             raise e
 
+    def batch_query(self, X: np.array, n: int) -> None:
+        if 'threads' in self._method_param:
+            self.batch_threads = self._method_param['threads']
+        else:
+            self.batch_threads = MAX_BATCH_QUERY_THREADS
+
+        self.batch_threads = min(self.batch_threads, X.size)
+
+        results = np.empty((X.shape[0], n), dtype=int)
+        latencies = np.empty(X.shape[0], dtype=float)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.batch_threads) as executor:
+            futures = {executor.submit(
+                self.query_impl, q, n): i for i, q in enumerate(X)}
+            for future in concurrent.futures.as_completed(futures):
+                i = futures[future]
+                try:
+                    result, latency = future.result()
+                    results[i] = result
+                    latencies[i] = latency
+                except Exception as x2:
+                    print(f"exception getting batch results: {x2}")
+        self.results = results
+        self.latencies = latencies
+
+    def get_batch_results(self) -> np.array:
+        return self.results
+
+    def get_batch_latencies(self) -> np.array:
+        return self.latencies
 
     def set_query_arguments(self, means_top_size):
         self.means_top_size = means_top_size
@@ -420,6 +464,9 @@ class YDBVector(BaseANN):
                 result += ", "
 
             result += ", ".join(param_parts)
+
+        if self.batch_threads and 'threads' not in self._method_param:
+            result += ", threads=" + str(self.batch_threads)
 
         result += ")"
         return result
