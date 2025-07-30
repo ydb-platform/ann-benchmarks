@@ -397,4 +397,29 @@ class YDBVector(BaseANN):
         return 0
 
     def __str__(self):
-        return f"YDBVector(metric={self._metric}, method_param={self._method_param})"
+        result = "YDBVector("
+
+        # Add metric if available
+        if hasattr(self, '_metric') and self._metric:
+            result += self._metric
+
+        # Add method parameters
+        param_parts = []
+        if self._method_param:
+            for k, v in self._method_param.items():
+                param_parts.append(f"{k}={v}")
+
+        # Add means_top_size if it's set to non-default value
+        if hasattr(self, 'means_top_size') and self.means_top_size != DEFAULT_MEANS_TOP_SIZE:
+            param_parts.append(f"means_top_size={self.means_top_size}")
+
+        # Add parameters if any exist
+        if param_parts:
+            # Add comma if metric was already added
+            if hasattr(self, '_metric') and self._metric:
+                result += ", "
+
+            result += ", ".join(param_parts)
+
+        result += ")"
+        return result
