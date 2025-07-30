@@ -317,7 +317,6 @@ def main():
         count=args.count,
         base_dir=args.definitions,
     )
-    random.shuffle(definitions)
 
     if args.algorithm:
         logger.info(f"running only {args.algorithm}")
