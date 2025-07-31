@@ -67,23 +67,30 @@ def check_ydb_cli_available():
         raise RuntimeError("ydb CLI binary not found in PATH. Please install YDB CLI: https://ydb.tech/docs/en/reference/ydb-cli/install")
 
 
-def drop_create_table(session, table_name, dimensions, n):
-    """Drop and create YDB table"""
-
-    try:
-        session.execute_scheme(f"DROP TABLE `{table_name}`")
-    except:
-        pass
-
-    approximate_row_size_bytes = 32 + 4 * dimensions
+def get_min_max_partitions(num_dimensions, n):
+    approximate_row_size_bytes = 32 + 4 * num_dimensions
     approximate_total_size = approximate_row_size_bytes * n
 
     # suppose 2 GB shards
     shard_count_by_size = (approximate_total_size >> 31)
 
-    shard_count = max(shard_count_by_size, MIN_SHARDS)
+    min_partitions = max(shard_count_by_size, MIN_SHARDS)
+    max_partitions = min_partitions * 2
 
-    rows_per_shard = n // shard_count
+    return min_partitions, max_partitions
+
+
+def drop_create_table(pool, table_name, num_dimensions, n):
+    """Drop and create YDB table"""
+
+    try:
+        pool.execute_with_retries(f"DROP TABLE `{table_name}`")
+    except:
+        pass
+
+    min_partitions, max_partitions = get_min_max_partitions(num_dimensions, n)
+
+    rows_per_shard = n // min_partitions
     cur_row = rows_per_shard
     split_keys = []
     while cur_row < n:
@@ -92,15 +99,11 @@ def drop_create_table(session, table_name, dimensions, n):
 
     if len(split_keys) == 0:
         split_keys_str = ""
-        min_partitions = MIN_SHARDS
     else:
         split_keys = [str(int(x)) for x in split_keys]
         split_keys_str = ",PARTITION_AT_KEYS = (" + ",".join(split_keys) + ")"
-        min_partitions = max(MIN_SHARDS, len(split_keys) + 1)
 
-    max_partitions = min_partitions * 4
-
-    print(f"Creating table for {n} vectors of {dimensions} dimensions with {min_partitions} shards")
+    print(f"Creating table for {n} vectors of {num_dimensions} dimensions with {min_partitions} shards")
 
     query = f"""
         CREATE TABLE `{table_name}` (
@@ -117,7 +120,7 @@ def drop_create_table(session, table_name, dimensions, n):
     """
 
     try:
-        session.execute_scheme(query)
+        pool.execute_with_retries(query)
     except Exception as e:
         print(f"Failed to create table `{table_name}`: ", e)
         raise e
@@ -125,7 +128,25 @@ def drop_create_table(session, table_name, dimensions, n):
     print(f"Table '{table_name}' created")
 
 
-def build_index(session, endpoint, database, table_name, index_name, num_dimensions, levels, clusters):
+def enable_split_by_load(pool, table_name, num_dimensions, n):
+    """Enables split by load"""
+
+    min_partitions, max_partitions = get_min_max_partitions(num_dimensions, n)
+
+    try:
+        pool.execute_with_retries(f"""
+            ALTER TABLE `{table_name}` SET (
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_partitions},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_partitions}
+            );
+        """)
+        print(f"Split by load enabled for table '{table_name}'")
+    except:
+        pass
+
+
+def build_index(pool, endpoint, database, table_name, index_name, num_dimensions, levels, clusters):
     """Create and wait to be ready the vector index"""
 
     table_path = database + "/" + table_name
@@ -144,11 +165,11 @@ def build_index(session, endpoint, database, table_name, index_name, num_dimensi
         );
     """
 
-    index_future = session.async_execute_scheme(query)
+    index_future = pool.execute_with_retries_async(query)
     try:
         # we set timeout to 1 second, because we want to check here
         # that requests have started execution and then check state manually
-        result = index_future.result(timeout=1)
+        result = index_future.result(timeout=1)[0]
     except ydb.issues.DeadlineExceed:
         print("DeadlineExceed for {}, but will check state manually".format(index_name))
     except concurrent.futures.TimeoutError:
@@ -328,7 +349,7 @@ class YDBVector(BaseANN):
     def fit(self, X):
         num_dimensions = X.shape[1]
 
-        drop_create_table(self.driver.table_client.session().create(), TABLE_NAME, num_dimensions, len(X))
+        drop_create_table(self.pool, TABLE_NAME, num_dimensions, len(X))
 
         print("copying data...")
         sys.stdout.flush()
@@ -350,11 +371,13 @@ class YDBVector(BaseANN):
         insert_elapsed_time_sec = time.time() - insert_start_time_sec
         print("inserted {} rows into table in {:.3f} seconds".format(num_rows, insert_elapsed_time_sec))
 
+        enable_split_by_load(self.pool, TABLE_NAME, num_dimensions, len(X))
+
         index_start_time_sec = time.time()
         print("building index...")
 
         build_index(
-            self.driver.table_client.session().create(),
+            self.pool,
             self.endpoint,
             self.database,
             TABLE_NAME,
@@ -365,6 +388,7 @@ class YDBVector(BaseANN):
 
         index_elapsed_time_sec = time.time() - index_start_time_sec
         print("built index in {:.3f} seconds".format(index_elapsed_time_sec))
+
 
     def query(self, v, n):
         return self.query_impl(v, n)[0]
