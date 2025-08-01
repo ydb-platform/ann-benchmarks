@@ -57,7 +57,7 @@ export ANN_BENCHMARKS_PG_HOST=localhost
 export ANN_BENCHMARKS_PG_PORT=5432
 export ANN_BENCHMARKS_PG_START_SERVICE=no
 
-python3 -u run.py --algorithm pgvector --dataset cohere-wikipedia-22-12-50M-angular --local [--batch]
+python3 -u run.py --algorithm pgvector --dataset cohere-wikipedia-22-12-10M-angular --local [--batch]
 ```
 
 # Running YDB
@@ -66,7 +66,7 @@ python3 -u run.py --algorithm pgvector --dataset cohere-wikipedia-22-12-50M-angu
 export YDB_ANONYMOUS_CREDENTIALS=1
 export YDB_CONNECTION_STRING="grpc://<HOST>:2135/?database=/Root/db1"
 
-python3 -u run.py --algorithm ydb --dataset cohere-wikipedia-22-12-50M-angular --local [--batch]
+python3 -u run.py --algorithm ydb --dataset cohere-wikipedia-22-12-10M-angular --local [--batch]
 ```
 
 # Getting results
