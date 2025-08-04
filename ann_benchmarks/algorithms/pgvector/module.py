@@ -22,6 +22,8 @@ This module will also attempt to create the pgvector extension inside the
 target database, if it has not been already created.
 """
 
+import concurrent.futures
+import numpy as np
 import os
 import subprocess
 import sys
@@ -31,10 +33,14 @@ import time
 import pgvector.psycopg
 import psycopg
 
+from psycopg_pool import ConnectionPool
+
 from typing import Dict, Any, Optional
 
 from ..base.module import BaseANN
 from ...util import get_bool_env_var
+
+from time import perf_counter
 
 
 METRIC_PROPERTIES = {
@@ -49,6 +55,7 @@ METRIC_PROPERTIES = {
     }
 }
 
+MAX_BATCH_QUERY_THREADS = 32
 
 def get_pg_param_env_var_name(pg_param_name: str) -> str:
     return f'ANN_BENCHMARKS_PG_{pg_param_name.upper()}'
@@ -73,16 +80,14 @@ class IndexingProgressMonitor:
     MONITORING_DELAY_SEC = 0.5
 
     def __init__(self, psycopg_connect_kwargs: Dict[str, str]) -> None:
-        self.psycopg_connect_kwargs = psycopg_connect_kwargs
+        self._psycopg_connect_kwargs = psycopg_connect_kwargs
         self.monitoring_condition = threading.Condition()
         self.stop_requested = False
-        self.psycopg_connect_kwargs = psycopg_connect_kwargs
         self.prev_phase = None
         self.prev_progress_pct = None
         self.prev_tuples_done = None
         self.prev_report_time_sec = None
         self.time_to_load_all_tuples_sec = None
-        self._ef_search = None
 
     def report_progress(
             self,
@@ -177,7 +182,7 @@ class IndexingProgressMonitor:
     def monitor_progress(self) -> None:
         prev_phase = None
         prev_progress_pct = None
-        with psycopg.connect(**self.psycopg_connect_kwargs) as monitoring_conn:
+        with psycopg.connect(**self._psycopg_connect_kwargs) as monitoring_conn:
             with monitoring_conn.cursor() as monitoring_cur:
                 self.monitoring_loop_impl(monitoring_cur)
 
@@ -211,7 +216,49 @@ class PGVector(BaseANN):
         self._metric = metric
         self._m = method_param['M']
         self._ef_construction = method_param['efConstruction']
-        self._cur = None
+
+        self._ef_search = None
+
+        self._method_param = method_param
+        self._batch_threads = None
+        self._pool = None
+
+        self._psycopg_connect_kwargs: Dict[str, Any] = dict(
+            autocommit=True,
+        )
+        for arg_name in ['user', 'password', 'dbname']:
+            # The default value is "ann" for all of these parameters.
+            self._psycopg_connect_kwargs[arg_name] = get_pg_conn_param(
+                arg_name, 'ann')
+
+        # If host/port are not specified, leave the default choice to the
+        # psycopg driver.
+        pg_host: Optional[str] = get_pg_conn_param('host')
+        if pg_host is not None:
+            self._psycopg_connect_kwargs['host'] = pg_host
+
+        pg_port_str: Optional[str] = get_pg_conn_param('port')
+        if pg_port_str is not None:
+            self._psycopg_connect_kwargs['port'] = int(pg_port_str)
+
+        should_start_service = get_bool_env_var(
+            get_pg_param_env_var_name('start_service'),
+            default_value=True)
+        if should_start_service:
+            subprocess.run(
+                "service postgresql start",
+                shell=True,
+                check=True,
+                stdout=sys.stdout,
+                stderr=sys.stderr)
+        else:
+            print(
+                "Assuming that PostgreSQL service is managed externally. "
+                "Not attempting to start the service.")
+
+        self._conn = psycopg.connect(**self._psycopg_connect_kwargs)
+        self.ensure_pgvector_extension_created(self._conn)
+        self.configure_connection(self._conn)
 
         if metric == "angular":
             self._query = "SELECT id FROM items ORDER BY embedding <=> %s LIMIT %s"
@@ -254,44 +301,7 @@ class PGVector(BaseANN):
                 cur.execute("CREATE EXTENSION vector")
 
     def fit(self, X):
-        psycopg_connect_kwargs: Dict[str, Any] = dict(
-            autocommit=True,
-        )
-        for arg_name in ['user', 'password', 'dbname']:
-            # The default value is "ann" for all of these parameters.
-            psycopg_connect_kwargs[arg_name] = get_pg_conn_param(
-                arg_name, 'ann')
-
-        # If host/port are not specified, leave the default choice to the
-        # psycopg driver.
-        pg_host: Optional[str] = get_pg_conn_param('host')
-        if pg_host is not None:
-            psycopg_connect_kwargs['host'] = pg_host
-
-        pg_port_str: Optional[str] = get_pg_conn_param('port')
-        if pg_port_str is not None:
-            psycopg_connect_kwargs['port'] = int(pg_port_str)
-
-        should_start_service = get_bool_env_var(
-            get_pg_param_env_var_name('start_service'),
-            default_value=True)
-        if should_start_service:
-            subprocess.run(
-                "service postgresql start",
-                shell=True,
-                check=True,
-                stdout=sys.stdout,
-                stderr=sys.stderr)
-        else:
-            print(
-                "Assuming that PostgreSQL service is managed externally. "
-                "Not attempting to start the service.")
-
-        conn = psycopg.connect(**psycopg_connect_kwargs)
-        self.ensure_pgvector_extension_created(conn)
-
-        pgvector.psycopg.register_vector(conn)
-        cur = conn.cursor()
+        cur = self._conn.cursor()
         cur.execute("DROP TABLE IF EXISTS items")
         cur.execute("CREATE TABLE items (id int, embedding vector(%d))" % X.shape[1])
         cur.execute("ALTER TABLE items ALTER COLUMN embedding SET STORAGE PLAIN")
@@ -317,7 +327,7 @@ class PGVector(BaseANN):
                 self._m,
                 self._ef_construction
             )
-        progress_monitor = IndexingProgressMonitor(psycopg_connect_kwargs)
+        progress_monitor = IndexingProgressMonitor(self._psycopg_connect_kwargs)
         progress_monitor.start_monitoring_thread()
 
         try:
@@ -326,21 +336,110 @@ class PGVector(BaseANN):
             progress_monitor.stop_monitoring_thread()
         print("done!")
         progress_monitor.report_timings()
-        self._cur = cur
+
+    def configure_connection(self, conn):
+        pgvector.psycopg.register_vector(conn)
+        if self._ef_search is not None:
+            conn.execute(f"SET hnsw.ef_search = {self._ef_search}")
+            conn.commit()
+
+    def check_connection(self, conn):
+        if self._ef_search is None:
+            return
+        with conn.cursor() as cur:
+            cur.execute("SHOW hnsw.ef_search")
+            if int(cur.fetchone()[0]) != self._ef_search:
+                cur.execute("SET hnsw.ef_search = %s", (self._ef_search,))
+
+    def start_pool(self):
+        if self._pool is not None:
+            self._pool.close()
+
+        max_size = int(self._batch_threads or MAX_BATCH_QUERY_THREADS)
+        if max_size < 1:
+            max_size = 1
+        self._pool = ConnectionPool(
+            kwargs=self._psycopg_connect_kwargs,
+            min_size=max_size,
+            max_size=max_size,
+            configure=self.configure_connection,
+        )
+        self._pool.wait()
+
+        print(f"Started pool with {max_size} connections")
+
+    def batch_query(self, X: np.array, n: int) -> None:
+        if 'threads' in self._method_param:
+            self._batch_threads = self._method_param['threads']
+        else:
+            self._batch_threads = MAX_BATCH_QUERY_THREADS
+
+        self._batch_threads = min(self._batch_threads, max(1, len(X)))
+        print(f"Batching queries in {self._batch_threads} threads, ef_search={self._ef_search}")
+        self.start_pool()
+
+        results = np.empty((X.shape[0], n), dtype=int)
+        latencies = np.empty(X.shape[0], dtype=float)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self._batch_threads) as executor:
+            futures = {executor.submit(
+                self.query_pooled, q, n): i for i, q in enumerate(X)}
+            for future in concurrent.futures.as_completed(futures):
+                i = futures[future]
+                try:
+                    result, latency = future.result()
+                    results[i] = result
+                    latencies[i] = latency
+                except Exception as x2:
+                    print(f"exception getting batch results: {x2}")
+        self.results = results
+        self.latencies = latencies
+
+    def get_batch_results(self) -> np.array:
+        return self.results
+
+    def get_batch_latencies(self) -> np.array:
+        return self.latencies
 
     def set_query_arguments(self, ef_search):
+        # this will affect all new connections (i.e. from the pool)
         self._ef_search = ef_search
-        self._cur.execute("SET hnsw.ef_search = %d" % ef_search)
+        self._psycopg_connect_kwargs["options"] = f"-c hnsw.ef_search={self._ef_search}"
+
+        # update existing "default" connection used in non-batch mode
+        with self._conn.cursor() as cur:
+            cur.execute(f"SET hnsw.ef_search = {self._ef_search}")
+        self._conn.commit()
 
     def query(self, v, n):
-        self._cur.execute(self._query, (v, n), binary=True, prepare=True)
-        return [id for id, in self._cur.fetchall()]
+        connection = self._conn
+        return self.query_impl(v, n, connection)[0]
+
+    def query_pooled(self, v, n):
+        with self._pool.connection() as connection:
+            return self.query_impl(v, n, connection)
+
+    def query_impl(self, v, n, connection):
+        start = perf_counter()
+        with connection.cursor() as cursor:
+            cursor.execute(self._query, (v, n), binary=True, prepare=True)
+            rows = cursor.fetchall()
+            result = np.fromiter((row[0] for row in rows), dtype=int)
+        elapsed = perf_counter() - start
+        return result, elapsed
 
     def get_memory_usage(self):
-        if self._cur is None:
+        start = time.perf_counter()
+        cur = self._conn.cursor()
+        if cur is None:
             return 0
-        self._cur.execute("SELECT pg_relation_size('items_embedding_idx')")
-        return self._cur.fetchone()[0] / 1024
+        cur.execute("SELECT pg_relation_size('items_embedding_idx')")
+        return cur.fetchone()[0] / 1024
 
     def __str__(self):
-        return f"PGVector(m={self._m}, ef_construction={self._ef_construction}, ef_search={self._ef_search})"
+        result = f"PGVector(m={self._m}, ef_construction={self._ef_construction}, ef_search={self._ef_search}"
+
+        if self._batch_threads and self._batch_threads != 1:
+            result += f", threads={self._batch_threads}"
+
+        result += ")"
+        return result

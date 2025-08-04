@@ -27,6 +27,7 @@ pip3 install --upgrade pip setuptools wheel
 # pgvector
 pip3 install pgvector
 pip3 install psycopg
+pip3 install psycopg-pool
 ```
 
 Ann's requirements
