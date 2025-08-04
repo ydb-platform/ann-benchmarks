@@ -685,6 +685,7 @@ DATASETS: Dict[str, Callable[[str], None]] = {
     "cohere-wikipedia-22-12-20M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 20_000_000, 1_000, "angular"),
     "cohere-wikipedia-22-12-40M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 40_000_000, 1_000, "angular"),
     "cohere-wikipedia-22-12-50M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 50_000_000, 1_000, "angular"),
+    "cohere-wikipedia-22-12-80M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 80_000_000, 1_000, "angular"),
     "cohere-wikipedia-22-12-100M-angular": lambda out_fn: cohere_wikipedia_22_12(out_fn, 100_000_000, 10_000, "angular"),
 }
 
