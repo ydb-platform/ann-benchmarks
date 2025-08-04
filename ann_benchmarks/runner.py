@@ -19,7 +19,7 @@ from .distance import dataset_transform, metrics
 from .results import store_results
 
 
-def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.array, distance: str, count: int, 
+def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.array, distance: str, count: int,
                          run_count: int, batch: bool) -> Tuple[dict, list]:
     """Run a search query using the provided algorithm and report the results.
 
@@ -53,7 +53,7 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
 
             Returns:
                 List[Tuple[float, List[Tuple[int, float]]]]: Tuple containing
-                    1. Total time taken for each query 
+                    1. Total time taken for each query
                     2. Result pairs consisting of (point index, distance to candidate data )
             """
             if prepared_queries:
@@ -91,7 +91,7 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
 
             Returns:
                 List[Tuple[float, List[Tuple[int, float]]]]: List of tuples, each containing
-                    1. Total time taken for each query 
+                    1. Total time taken for each query
                     2. Result pairs consisting of (point index, distance to candidate data )
             """
             # TODO: consider using a dataclass to represent return value.
@@ -194,7 +194,7 @@ def build_index(algo: BaseANN, X_train: numpy.ndarray) -> Tuple:
     return build_time, index_size
 
 
-def run(definition: Definition, dataset_name: str, count: int, run_count: int, batch: bool) -> None:
+def run(definition: Definition, dataset_name: str, count: int, run_count: int, batch: bool, skip_dataload: bool) -> None:
     """Run the algorithm benchmarking.
 
     Args:
@@ -203,6 +203,7 @@ def run(definition: Definition, dataset_name: str, count: int, run_count: int, b
         count (int): The number of results to return.
         run_count (int): The number of runs.
         batch (bool): If true, runs in batch mode.
+        skip_dataload (bool): If true, skips data load phase.
     """
     algo = instantiate_algorithm(definition)
     assert not definition.query_argument_groups or hasattr(
@@ -218,7 +219,11 @@ function"""
         if hasattr(algo, "supports_prepared_queries"):
             algo.supports_prepared_queries()
 
-        build_time, index_size = build_index(algo, X_train)
+        if not skip_dataload:
+            build_time, index_size = build_index(algo, X_train)
+        else:
+            build_time, index_size = 0, 0
+            print("Dataload skipped")
 
         query_argument_groups = definition.query_argument_groups or [[]]  # Ensure at least one iteration
 
@@ -226,7 +231,7 @@ function"""
             print(f"Running query argument group {pos} of {len(query_argument_groups)}...")
             if query_arguments:
                 algo.set_query_arguments(*query_arguments)
-            
+
             descriptor, results = run_individual_query(algo, X_train, X_test, distance, count, run_count, batch)
 
             descriptor.update({
@@ -241,7 +246,7 @@ function"""
         algo.done()
 
 def run_from_cmdline():
-    """Calls the function `run` using arguments from the command line. See `ArgumentParser` for 
+    """Calls the function `run` using arguments from the command line. See `ArgumentParser` for
     arguments, all run it with `--help`.
     """
     parser = argparse.ArgumentParser(
@@ -298,6 +303,7 @@ def run_docker(
     runs: int,
     timeout: int,
     batch: bool,
+    skip_dataload: bool,
     cpu_limit: str,
     mem_limit: Optional[int] = None
 ) -> None:
@@ -321,6 +327,8 @@ def run_docker(
     ]
     if batch:
         cmd += ["--batch"]
+    if skip_dataload:
+        cmd += ["--skip-dataload"]
     cmd.append(json.dumps(definition.arguments))
     cmd += [json.dumps(qag) for qag in definition.query_argument_groups]
 
