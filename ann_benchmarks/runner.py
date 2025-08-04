@@ -203,7 +203,7 @@ def build_index(algo: BaseANN, X_train: numpy.ndarray) -> Tuple:
     return build_time, index_size
 
 
-def run(definition: Definition, dataset_name: str, count: int, run_count: int, batch: bool) -> None:
+def run(definition: Definition, dataset_name: str, count: int, run_count: int, batch: bool, skip_dataload: bool) -> None:
     """Run the algorithm benchmarking.
 
     Args:
@@ -212,6 +212,7 @@ def run(definition: Definition, dataset_name: str, count: int, run_count: int, b
         count (int): The number of results to return.
         run_count (int): The number of runs.
         batch (bool): If true, runs in batch mode.
+        skip_dataload (bool): If true, skips data load phase.
     """
     algo = instantiate_algorithm(definition)
     assert not definition.query_argument_groups or hasattr(
@@ -227,7 +228,11 @@ function"""
         if hasattr(algo, "supports_prepared_queries"):
             algo.supports_prepared_queries()
 
-        build_time, index_size = build_index(algo, X_train)
+        if not skip_dataload:
+            build_time, index_size = build_index(algo, X_train)
+        else:
+            build_time, index_size = 0, 0
+            print("Dataload skipped")
 
         query_argument_groups = definition.query_argument_groups or [
             []]  # Ensure at least one iteration
@@ -317,6 +322,7 @@ def run_docker(
     runs: int,
     timeout: int,
     batch: bool,
+    skip_dataload: bool,
     cpu_limit: str,
     mem_limit: Optional[int] = None
 ) -> None:
@@ -340,6 +346,8 @@ def run_docker(
     ]
     if batch:
         cmd += ["--batch"]
+    if skip_dataload:
+        cmd += ["--skip-dataload"]
     cmd.append(json.dumps(definition.arguments))
     cmd += [json.dumps(qag) for qag in definition.query_argument_groups]
 
