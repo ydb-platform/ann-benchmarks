@@ -433,7 +433,7 @@ class YDBVector(BaseANN):
         else:
             self.batch_threads = MAX_BATCH_QUERY_THREADS
 
-        self.batch_threads = min(self.batch_threads, X.size)
+        self.batch_threads = min(self.batch_threads, max(1, len(X)))
 
         results = np.empty((X.shape[0], n), dtype=int)
         latencies = np.empty(X.shape[0], dtype=float)
