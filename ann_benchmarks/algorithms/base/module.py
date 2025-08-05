@@ -22,7 +22,7 @@ class BaseANN(object):
         return psutil.Process().memory_info().rss / 1024
 
     def fit(self, X: numpy.array) -> None:
-        """Fits the ANN algorithm to the provided data. 
+        """Fits the ANN algorithm to the provided data.
 
         Note: This is a placeholder method to be implemented by subclasses.
 
@@ -32,7 +32,7 @@ class BaseANN(object):
         pass
 
     def query(self, q: numpy.array, n: int) -> numpy.array:
-        """Performs a query on the algorithm to find the nearest neighbors. 
+        """Performs a query on the algorithm to find the nearest neighbors.
 
         Note: This is a placeholder method to be implemented by subclasses.
 
@@ -53,7 +53,7 @@ class BaseANN(object):
         Args:
             X (numpy.array): An array of vectors to find the nearest neighbors of.
             n (int): The number of nearest neighbors to return for each query.
-        Returns: 
+        Returns:
             None: self.get_batch_results() is responsible for retrieving batch result
         """
         pool = ThreadPool()
@@ -74,6 +74,10 @@ class BaseANN(object):
             dict: A dictionary of additional attributes.
         """
         return {}
+
+    def should_check_results(self):
+        """Used for testing purposes: if returns false, no check performed"""
+        return True
 
     def __str__(self) -> str:
         return self.name

@@ -23,6 +23,9 @@ target database, if it has not been already created.
 """
 
 import concurrent.futures
+import logging
+import math
+import multiprocessing as mp
 import numpy as np
 import os
 import subprocess
@@ -56,6 +59,57 @@ METRIC_PROPERTIES = {
 }
 
 MAX_BATCH_QUERY_THREADS = 32
+
+USE_SELECT1 = False
+USE_MP = True
+
+
+def proc_execute_sub_batch(connect_kwargs,
+                           query_sql: str,
+                           ef_search: int | None,
+                           X_chunk: np.ndarray,  # THIS IS COPIED to the child
+                           n: int,
+                           USE_SELECT1: bool):
+    """
+    Executes queries for the rows in X_chunk and returns (results_sub, latencies_sub).
+    """
+    conn = psycopg.connect(**connect_kwargs)
+
+    if not USE_SELECT1:
+        pgvector.psycopg.register_vector(conn)
+
+    try:
+        results_sub   = np.empty((len(X_chunk), n), dtype=int)
+        latencies_sub = np.empty(len(X_chunk), dtype=float)
+
+        with conn.cursor() as cursor:
+            if ef_search is not None and not USE_SELECT1:
+                cursor.execute(f"SET hnsw.ef_search = {ef_search}")
+
+            if USE_SELECT1:
+                # Fixed ids 0..n-1 for each query
+                dummy_ids = np.arange(n, dtype=int)
+                for j in range(len(X_chunk)):
+                    t0 = perf_counter()
+                    cursor.execute("SELECT 1")
+                    cursor.fetchone()  # ensure round-trip completes
+                    results_sub[j, :] = dummy_ids
+                    latencies_sub[j]  = perf_counter() - t0
+            else:
+                for j, v in enumerate(X_chunk):
+                    t0 = perf_counter()
+                    cursor.execute(query_sql, (v, n), binary=True, prepare=True)
+                    rows = cursor.fetchall()
+                    # If fewer than n is acceptable, relax this check
+                    if len(rows) != n:
+                        raise RuntimeError(f"Expected {n} rows, got {len(rows)}")
+                    results_sub[j, :] = np.fromiter((r[0] for r in rows), dtype=int, count=n)
+                    latencies_sub[j]  = perf_counter() - t0
+
+        return results_sub, latencies_sub
+    finally:
+        conn.close()
+
 
 def get_pg_param_env_var_name(pg_param_name: str) -> str:
     return f'ANN_BENCHMARKS_PG_{pg_param_name.upper()}'
@@ -241,6 +295,8 @@ class PGVector(BaseANN):
         if pg_port_str is not None:
             self._psycopg_connect_kwargs['port'] = int(pg_port_str)
 
+        self._psycopg_connect_kwargs["application_name"] = "ann-benchmarks/pgvector"
+
         should_start_service = get_bool_env_var(
             get_pg_param_env_var_name('start_service'),
             default_value=True)
@@ -338,20 +394,14 @@ class PGVector(BaseANN):
         progress_monitor.report_timings()
 
     def configure_connection(self, conn):
-        pgvector.psycopg.register_vector(conn)
-        if self._ef_search is not None:
-            conn.execute(f"SET hnsw.ef_search = {self._ef_search}")
-            conn.commit()
-
-    def check_connection(self, conn):
-        if self._ef_search is None:
-            return
-        with conn.cursor() as cur:
-            cur.execute("SHOW hnsw.ef_search")
-            if int(cur.fetchone()[0]) != self._ef_search:
-                cur.execute("SET hnsw.ef_search = %s", (self._ef_search,))
+        if not USE_SELECT1:
+            pgvector.psycopg.register_vector(conn)
+            if self._ef_search is not None:
+                conn.execute(f"SET hnsw.ef_search = {self._ef_search}")
+                conn.commit()
 
     def start_pool(self):
+        #logging.getLogger("psycopg.pool").setLevel(logging.DEBUG)
         if self._pool is not None:
             self._pool.close()
 
@@ -363,12 +413,21 @@ class PGVector(BaseANN):
             min_size=max_size,
             max_size=max_size,
             configure=self.configure_connection,
+            timeout=120.0,
+            max_lifetime=7200,
+            max_idle=7200,
         )
         self._pool.wait()
 
         print(f"Started pool with {max_size} connections")
 
     def batch_query(self, X: np.array, n: int) -> None:
+        if USE_MP:
+            self.batch_query_mp(X, n)
+        else:
+            self.batch_query_thread_pool(X, n)
+
+    def batch_query_thread_pool_naive(self, X: np.array, n: int) -> None:
         if 'threads' in self._method_param:
             self._batch_threads = self._method_param['threads']
         else:
@@ -394,6 +453,105 @@ class PGVector(BaseANN):
         self.results = results
         self.latencies = latencies
 
+    def batch_query_thread_pool(self, X: np.ndarray, n: int) -> None:
+        if 'threads' in self._method_param:
+            self._batch_threads = self._method_param['threads']
+        else:
+            self._batch_threads = MAX_BATCH_QUERY_THREADS
+
+        self._batch_threads = min(self._batch_threads, max(1, len(X)))
+        print(f"Batching queries in {self._batch_threads} threads (via ThreadPool), ef_search={self._ef_search}, dummy={USE_SELECT1}")
+
+        total = len(X)
+        results  = np.empty((total, n), dtype=int)
+        latencies = np.empty(total, dtype=float)
+
+        chunk = math.ceil(total / self._batch_threads)
+        ranges = [(s, min(s + chunk, total)) for s in range(0, total, chunk)]
+
+        connect_kwargs = dict(self._psycopg_connect_kwargs)
+        query_sql = self._query
+        ef_search = self._ef_search
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self._batch_threads) as executor:
+            future_to_range = {
+                executor.submit(
+                    proc_execute_sub_batch,
+                    connect_kwargs,
+                    query_sql,
+                    ef_search,
+                    X[s:e],      # copied slice to thread
+                    n,
+                    USE_SELECT1
+                ): (s, e)
+                for (s, e) in ranges
+            }
+
+            for future in concurrent.futures.as_completed(future_to_range):
+                s, e = future_to_range[future]
+                try:
+                    res_sub, lat_sub = future.result()
+                    results[s:e, :] = res_sub
+                    latencies[s:e]  = lat_sub
+                except Exception as exc:
+                    print(f"exception in thread sub-batch ({s},{e}): {exc}")
+
+        self.results = results
+        self.latencies = latencies
+
+    def batch_query_mp(self, X: np.ndarray, n: int) -> None:
+        if 'threads' in self._method_param:
+            self._batch_threads = int(self._method_param['threads'])
+        else:
+            self._batch_threads = MAX_BATCH_QUERY_THREADS
+
+        self._batch_threads = min(self._batch_threads, max(1, len(X)))
+        print(f"Batching queries in {self._batch_threads} processes, ef_search={self._ef_search}, dummy={USE_SELECT1}")
+
+        try:
+            mp.set_start_method("spawn", force=False)
+        except RuntimeError:
+            pass  # already set elsewhere
+
+        total = len(X)
+        results  = np.empty((total, n), dtype=int)
+        latencies = np.empty(total, dtype=float)
+
+        chunk = math.ceil(total / self._batch_threads)
+        ranges = [(s, min(s + chunk, total)) for s in range(0, total, chunk)]
+
+        connect_kwargs = dict(self._psycopg_connect_kwargs)  # each process connects independently
+        query_sql = self._query
+        ef_search = self._ef_search
+
+        ctx = mp.get_context("spawn")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self._batch_threads, mp_context=ctx) as ex:
+            future_to_range = {
+                ex.submit(
+                    proc_execute_sub_batch,
+                    connect_kwargs,
+                    query_sql,
+                    ef_search,
+                    X[s:e],        # <-- sliced copy to child
+                    n,
+                    USE_SELECT1
+                ): (s, e)
+                for (s, e) in ranges
+            }
+
+            for future in concurrent.futures.as_completed(future_to_range):
+                s, e = future_to_range[future]
+                try:
+                    res_sub, lat_sub = future.result()
+                    results[s:e, :] = res_sub
+                    latencies[s:e]  = lat_sub
+                except Exception as exc:
+                    print(f"exception in sub-batch ({s},{e}): {exc}")
+                    # raise  # optionally fail-fast
+
+        self.results = results
+        self.latencies = latencies
+
     def get_batch_results(self) -> np.array:
         return self.results
 
@@ -403,12 +561,14 @@ class PGVector(BaseANN):
     def set_query_arguments(self, ef_search):
         # this will affect all new connections (i.e. from the pool)
         self._ef_search = ef_search
-        self._psycopg_connect_kwargs["options"] = f"-c hnsw.ef_search={self._ef_search}"
+        if not USE_SELECT1:
+            self._psycopg_connect_kwargs["options"] = f"-c hnsw.ef_search={self._ef_search}"
 
         # update existing "default" connection used in non-batch mode
-        with self._conn.cursor() as cur:
-            cur.execute(f"SET hnsw.ef_search = {self._ef_search}")
-        self._conn.commit()
+        if not USE_SELECT1:
+            with self._conn.cursor() as cur:
+                cur.execute(f"SET hnsw.ef_search = {self._ef_search}")
+            self._conn.commit()
 
     def query(self, v, n):
         connection = self._conn
@@ -421,9 +581,15 @@ class PGVector(BaseANN):
     def query_impl(self, v, n, connection):
         start = perf_counter()
         with connection.cursor() as cursor:
-            cursor.execute(self._query, (v, n), binary=True, prepare=True)
-            rows = cursor.fetchall()
-            result = np.fromiter((row[0] for row in rows), dtype=int)
+            if USE_SELECT1:
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+                result = np.arange(n, dtype=int)
+            else:
+                cursor.execute(self._query, (v, n), binary=True, prepare=True)
+                rows = cursor.fetchall()
+                result = np.fromiter((row[0] for row in rows), dtype=int)
+
         elapsed = perf_counter() - start
         return result, elapsed
 
@@ -434,6 +600,17 @@ class PGVector(BaseANN):
             return 0
         cur.execute("SELECT pg_relation_size('items_embedding_idx')")
         return cur.fetchone()[0] / 1024
+
+    def should_check_results(self):
+        return not USE_SELECT1
+
+    def get_additional(self) -> Dict[str, Any]:
+        d = {}
+        if self._batch_threads:
+            d["threads"] = self._batch_threads
+            if USE_MP:
+                d["mp-mode"] = True
+        return d
 
     def __str__(self):
         result = f"PGVector(m={self._m}, ef_construction={self._ef_construction}, ef_search={self._ef_search}"
