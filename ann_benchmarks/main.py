@@ -311,6 +311,11 @@ def main():
     if os.path.exists(INDEX_DIR):
         shutil.rmtree(INDEX_DIR)
 
+    if args.batch:
+        config_name = "config_batch.yml"
+    else:
+        config_name = "config.yml"
+
     dataset, dimension = get_dataset(args.dataset)
     definitions: List[Definition] = get_definitions(
         dimension=dimension,
@@ -318,6 +323,7 @@ def main():
         distance_metric=dataset.attrs["distance"],
         count=args.count,
         base_dir=args.definitions,
+        config_name=config_name,
     )
 
     if args.algorithm:

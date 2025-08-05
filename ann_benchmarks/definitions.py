@@ -127,16 +127,16 @@ def _substitute_variables(arg: Any, vs: Dict[str, Any]) -> Any:
         return arg
 
 
-def get_config_files(base_dir: str = "ann_benchmarks/algorithms") -> List[str]:
+def get_config_files(base_dir: str = "ann_benchmarks/algorithms", config_name = "config.yml") -> List[str]:
     """Get config files for all algorithms."""
-    config_files = glob.glob(os.path.join(base_dir, "*", "config.yml"))
+    config_files = glob.glob(os.path.join(base_dir, "*", config_name))
     return list(
-        set(config_files) - {os.path.join(base_dir, "base", "config.yml")}
+        set(config_files) - {os.path.join(base_dir, "base", config_name)}
     )
 
-def load_configs(point_type: str, base_dir: str = "ann_benchmarks/algorithms") -> Dict[str, Any]:
+def load_configs(point_type: str, base_dir: str = "ann_benchmarks/algorithms", config_name = "config.yml") -> Dict[str, Any]:
     """Load algorithm configurations for a given point_type."""
-    config_files = get_config_files(base_dir=base_dir)
+    config_files = get_config_files(base_dir=base_dir, config_name=config_name)
     configs = {}
     for config_file in config_files:
         with open(config_file, 'r') as stream:
@@ -162,7 +162,7 @@ def _get_definitions(base_dir: str = "ann_benchmarks/algorithms") -> List[Dict[s
                 print(f"Error loading YAML from {config_file}: {e}")
     return configs
 
-def _get_algorithm_definitions(point_type: str, distance_metric: str, base_dir: str = "ann_benchmarks/algorithms") -> Dict[str, Dict[str, Any]]:
+def _get_algorithm_definitions(point_type: str, distance_metric: str, base_dir: str = "ann_benchmarks/algorithms", config_name = "config.yml") -> Dict[str, Dict[str, Any]]:
     """Get algorithm definitions for a specific point type and distance metric.
 
     A specific algorithm folder can have multiple algorithm definitions for a given point type and
@@ -191,7 +191,7 @@ def _get_algorithm_definitions(point_type: str, distance_metric: str, base_dir: 
     }
     ```
     """
-    configs = load_configs(point_type, base_dir)
+    configs = load_configs(point_type, base_dir, config_name)
     definitions = {}
 
     # param `_` is filename, not specific name
@@ -359,11 +359,13 @@ def get_definitions(
     point_type: str = "float",
     distance_metric: str = "euclidean",
     count: int = 10,
-    base_dir: str = "ann_benchmarks/algorithms"
+    base_dir: str = "ann_benchmarks/algorithms",
+    config_name = "config.yml",
 ) -> List[Definition]:
     algorithm_definitions = _get_algorithm_definitions(point_type=point_type,
                                                        distance_metric=distance_metric,
-                                                       base_dir=base_dir
+                                                       base_dir=base_dir,
+                                                       config_name=config_name,
                                                        )
 
     definitions: List[Definition] = []
