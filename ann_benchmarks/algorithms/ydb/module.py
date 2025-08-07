@@ -8,14 +8,14 @@ https://ydb.tech/docs/en/recipes/ydb-sdk/auth-env
 
 import concurrent.futures
 import json
+import math
+import multiprocessing as mp
 import numpy as np
 import os
 import random
 import shutil
-import struct
 import subprocess
 import sys
-import threading
 import time
 import ydb
 
@@ -38,6 +38,83 @@ BACKOFF_CEILING = 5
 DEFAULT_MEANS_TOP_SIZE = 3
 
 MAX_BATCH_QUERY_THREADS = 32
+
+
+def query_impl(pool, database, index_name, metric, means_top_size, v, n):
+    start = time.perf_counter()
+    binary_embedding = float_embedding_to_binary(v)
+
+    if metric == "angular":
+        distance_func = "Knn::CosineDistance"
+    elif metric == "euclidean":
+        distance_func = "Knn::EuclideanDistance"
+    else:
+        print(f"Unsupported metric: {metric}", file=sys.stderr)
+        sys.exit(1)
+
+    query = f"""
+        PRAGMA TablePathPrefix("{database}");
+
+        pragma ydb.KMeansTreeSearchTopSize = "{means_top_size}";
+
+        DECLARE $embedding_list as List<Float>;
+        $TargetEmbedding = Knn::ToBinaryStringFloat($embedding_list);
+
+        SELECT id, {distance_func}(embedding, $TargetEmbedding) as dist
+        FROM `{TABLE_NAME}`
+        VIEW `{index_name}`
+        ORDER BY dist ASC
+        LIMIT {n};
+    """
+
+    try:
+        result_sets = pool.execute_with_retries(
+            query,
+            {
+                "$embedding_list": (v, ydb.ListType(ydb.PrimitiveType.Float)),
+            },
+        )
+
+        rows = result_sets[0].rows
+        ids = [row.id for row in rows]
+        elapsed = time.perf_counter() - start
+        return ids, elapsed
+    except Exception as e:
+        print("Query failed: ", e)
+        raise e
+
+
+def proc_execute_sub_batch(database,
+                           metric,
+                           index_name,
+                           means_top_size,
+                           X_chunk: np.ndarray,  # THIS IS COPIED to the child
+                           n: int):
+    """
+    Executes queries for the rows in X_chunk and returns (results_sub, latencies_sub).
+    """
+
+    driver = ydb.Driver(
+        connection_string=os.environ["YDB_CONNECTION_STRING"],
+        credentials=ydb.credentials_from_env_variables(),
+    )
+
+    # Wait for the driver to become active
+    driver.wait(timeout=5)
+
+    pool = ydb.QuerySessionPool(driver)
+
+    results_sub   = np.empty((len(X_chunk), n), dtype=int)
+    latencies_sub = np.empty(len(X_chunk), dtype=float)
+
+    for j, v in enumerate(X_chunk):
+        t0 = time.perf_counter()
+        result = query_impl(
+            pool, database, index_name, metric, means_top_size, v, n)[0]
+        results_sub[j, :] = result
+        latencies_sub[j] = time.perf_counter() - t0
+
+    return results_sub, latencies_sub
 
 
 def get_backoff_wait_ms(retry_count):
@@ -155,7 +232,7 @@ def build_index(pool, endpoint, database, table_name, index_name, metric, num_di
         distance = "cosine"
     elif metric == "euclidean":
         distance = "euclidean"
-    elif:
+    else:
         print(f"Unsupported metric: {metric}", file=sys.stderr)
         sys.exit(1)
 
@@ -322,15 +399,15 @@ class YDBVector(BaseANN):
         # Check if ydb CLI is available before proceeding
         check_ydb_cli_available()
 
-        self.batch_threads = None
+        self._batch_threads = None
 
         self._metric = metric
         if method_param is None:
             method_param = {}
         self._method_param = method_param
 
-        levels = self._method_param['levels'],
-        clusters = self._method_param['clusters'])
+        levels = self._method_param['levels']
+        clusters = self._method_param['clusters']
 
         self._index_name = INDEX_BASE_NAME + f"_{metric}_{clusters}x{levels}"
 
@@ -404,72 +481,55 @@ class YDBVector(BaseANN):
 
 
     def query(self, v, n):
-        return self.query_impl(v, n)[0]
+        return query_impl(
+            self._pool, self._database, self._index_name, self._metric, self._means_top_size, v, n)[0]
 
-    def query_impl(self, v, n):
-        start = time.perf_counter()
-        binary_embedding = float_embedding_to_binary(v)
+    def batch_query(self, X: np.ndarray, n: int) -> None:
+        if 'threads' in self._method_param:
+            self._batch_threads = int(self._method_param['threads'])
+        else:
+            self._batch_threads = MAX_BATCH_QUERY_THREADS
 
-        if self._metric == "angular":
-            distance_func = "Knn::CosineDistance"
-        elif self._metric == "euclidean":
-            distance_func = "Knn::EuclideanDistance"
-        elif:
-            print(f"Unsupported metric: {metric}", file=sys.stderr)
-            sys.exit(1)
-
-        query = f"""
-            PRAGMA TablePathPrefix("{self._database}");
-
-            pragma ydb.KMeansTreeSearchTopSize = "{self._means_top_size}";
-
-            DECLARE $embedding_list as List<Float>;
-            $TargetEmbedding = Knn::ToBinaryStringFloat($embedding_list);
-
-            SELECT id, {distance_func}(embedding, $TargetEmbedding) as dist
-            FROM `{TABLE_NAME}`
-            VIEW `{self._index_name}`
-            ORDER BY dist ASC
-            LIMIT {n};
-        """
+        self._batch_threads = min(self._batch_threads, max(1, len(X)))
+        print(f"Batching queries in {self._batch_threads} processes")
 
         try:
-            result_sets = self._pool.execute_with_retries(
-                query,
-                {
-                    "$embedding_list": (v, ydb.ListType(ydb.PrimitiveType.Float)),
-                },
-            )
+            mp.set_start_method("spawn", force=False)
+        except RuntimeError:
+            pass  # already set elsewhere
 
-            rows = result_sets[0].rows
-            ids = [row.id for row in rows]
-            elapsed = time.perf_counter() - start
-            return ids, elapsed
-        except Exception as e:
-            print("Query failed: ", e)
-            raise e
+        total = len(X)
+        results  = np.empty((total, n), dtype=int)
+        latencies = np.empty(total, dtype=float)
 
-    def batch_query(self, X: np.array, n: int) -> None:
-        if 'threads' in self._method_param:
-            self.batch_threads = self._method_param['threads']
-        else:
-            self.batch_threads = MAX_BATCH_QUERY_THREADS
+        chunk = math.ceil(total / self._batch_threads)
+        ranges = [(s, min(s + chunk, total)) for s in range(0, total, chunk)]
 
-        self.batch_threads = min(self.batch_threads, max(1, len(X)))
+        ctx = mp.get_context("spawn")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self._batch_threads, mp_context=ctx) as ex:
+            future_to_range = {
+                ex.submit(
+                    proc_execute_sub_batch,
+                    self._database,
+                    self._metric,
+                    self._index_name,
+                    self._means_top_size,
+                    X[s:e],        # <-- sliced copy to child
+                    n,
+                ): (s, e)
+                for (s, e) in ranges
+            }
 
-        results = np.empty((X.shape[0], n), dtype=int)
-        latencies = np.empty(X.shape[0], dtype=float)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.batch_threads) as executor:
-            futures = {executor.submit(
-                self.query_impl, q, n): i for i, q in enumerate(X)}
-            for future in concurrent.futures.as_completed(futures):
-                i = futures[future]
+            for future in concurrent.futures.as_completed(future_to_range):
+                s, e = future_to_range[future]
                 try:
-                    result, latency = future.result()
-                    results[i] = result
-                    latencies[i] = latency
-                except Exception as x2:
-                    print(f"exception getting batch results: {x2}")
+                    res_sub, lat_sub = future.result()
+                    results[s:e, :] = res_sub
+                    latencies[s:e]  = lat_sub
+                except Exception as exc:
+                    print(f"exception in sub-batch ({s},{e}): {exc}")
+                    # raise  # optionally fail-fast
+
         self.results = results
         self.latencies = latencies
 
@@ -500,7 +560,7 @@ class YDBVector(BaseANN):
                 param_parts.append(f"{k}={v}")
 
         # Add means_top_size if it's set to non-default value
-        if hasattr(self, 'means_top_size') and self._means_top_size != DEFAULT_MEANS_TOP_SIZE:
+        if hasattr(self, '_means_top_size') and self._means_top_size != DEFAULT_MEANS_TOP_SIZE:
             param_parts.append(f"means_top_size={self._means_top_size}")
 
         # Add parameters if any exist
@@ -511,8 +571,8 @@ class YDBVector(BaseANN):
 
             result += ", ".join(param_parts)
 
-        if self.batch_threads and 'threads' not in self._method_param:
-            result += ", threads=" + str(self.batch_threads)
+        if self._batch_threads and 'threads' not in self._method_param:
+            result += ", threads=" + str(self._batch_threads)
 
         result += ")"
         return result

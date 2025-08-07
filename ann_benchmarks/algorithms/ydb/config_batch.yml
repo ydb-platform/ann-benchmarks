@@ -1,0 +1,33 @@
+float:
+  any:
+  - base_args: ['@metric']
+    constructor: YDBVector
+    disabled: false
+    docker_tag: ann-benchmarks-ydb
+    module: ann_benchmarks.algorithms.ydb
+    name: ydb
+    run_groups:
+      C50-l3-10-t1:
+        arg_groups: [{clusters: 50, levels: 3, threads: 1}]
+        args: {}
+        query_args: [[10]]
+      C50-l3-10-t2:
+        arg_groups: [{clusters: 50, levels: 3, threads: 2}]
+        args: {}
+        query_args: [[10]]
+      C50-l3-10-t4:
+        arg_groups: [{clusters: 50, levels: 3, threads: 4}]
+        args: {}
+        query_args: [[10]]
+      C50-l3-10-t8:
+        arg_groups: [{clusters: 50, levels: 3, threads: 8}]
+        args: {}
+        query_args: [[10]]
+      C50-l3-10-t16:
+        arg_groups: [{clusters: 50, levels: 3, threads: 16}]
+        args: {}
+        query_args: [[10]]
+      C50-l3-10-t16:
+        arg_groups: [{clusters: 50, levels: 3, threads: 32}]
+        args: {}
+        query_args: [[10]]
