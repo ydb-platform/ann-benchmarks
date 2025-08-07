@@ -1,0 +1,33 @@
+float:
+  any:
+  - base_args: ['@metric']
+    constructor: PGVector
+    disabled: false
+    docker_tag: ann-benchmarks-pgvector
+    module: ann_benchmarks.algorithms.pgvector
+    name: pgvector
+    run_groups:
+      M-24-1:
+        arg_groups: [{M: 24, efConstruction: 200, threads: 1}]
+        args: {}
+        query_args: [[400]]
+      M-24-2:
+        arg_groups: [{M: 24, efConstruction: 200, threads: 2}]
+        args: {}
+        query_args: [[400]]
+      M-24-4:
+        arg_groups: [{M: 24, efConstruction: 200, threads: 4}]
+        args: {}
+        query_args: [[400]]
+      M-24-8:
+        arg_groups: [{M: 24, efConstruction: 200, threads: 8}]
+        args: {}
+        query_args: [[400]]
+      M-24-16:
+        arg_groups: [{M: 24, efConstruction: 200, threads: 16}]
+        args: {}
+        query_args: [[400]]
+      M-24-32:
+        arg_groups: [{M: 24, efConstruction: 200, threads: 32}]
+        args: {}
+        query_args: [[400]]
