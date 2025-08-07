@@ -25,7 +25,7 @@ from ..base.module import BaseANN
 
 
 TABLE_NAME = "items"
-INDEX_NAME = "idx_vector_items"
+INDEX_BASE_NAME = "idx_vector_items"
 
 MIN_SHARDS = 100
 
@@ -321,6 +321,11 @@ class YDBVector(BaseANN):
             method_param = {}
         self._method_param = method_param
 
+        levels = self._method_param['levels'],
+        clusters = self._method_param['clusters'])
+
+        self._index_name = INDEX_BASE_NAME + f"_{metric}_{clusters}x{levels}"
+
         try:
             self.driver = initialize_ydb_from_env()
             self.pool = ydb.QuerySessionPool(self.driver)
@@ -381,7 +386,7 @@ class YDBVector(BaseANN):
             self.endpoint,
             self.database,
             TABLE_NAME,
-            INDEX_NAME,
+            self._index_name,
             num_dimensions,
             self._method_param['levels'],
             self._method_param['clusters'])
@@ -406,7 +411,7 @@ class YDBVector(BaseANN):
 
             SELECT id, Knn::CosineDistance(embedding, $TargetEmbedding) as dist
             FROM `{TABLE_NAME}`
-            VIEW `{INDEX_NAME}`
+            VIEW `{self._index_name}`
             ORDER BY dist ASC
             LIMIT {n};
         """
