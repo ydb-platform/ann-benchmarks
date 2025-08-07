@@ -68,8 +68,7 @@ def proc_execute_sub_batch(connect_kwargs,
                            query_sql: str,
                            ef_search: int | None,
                            X_chunk: np.ndarray,  # THIS IS COPIED to the child
-                           n: int,
-                           USE_SELECT1: bool):
+                           n: int):
     """
     Executes queries for the rows in X_chunk and returns (results_sub, latencies_sub).
     """
@@ -482,7 +481,6 @@ class PGVector(BaseANN):
                     ef_search,
                     X[s:e],      # copied slice to thread
                     n,
-                    USE_SELECT1
                 ): (s, e)
                 for (s, e) in ranges
             }
@@ -534,7 +532,6 @@ class PGVector(BaseANN):
                     ef_search,
                     X[s:e],        # <-- sliced copy to child
                     n,
-                    USE_SELECT1
                 ): (s, e)
                 for (s, e) in ranges
             }
