@@ -146,10 +146,18 @@ def enable_split_by_load(pool, table_name, num_dimensions, n):
         pass
 
 
-def build_index(pool, endpoint, database, table_name, index_name, num_dimensions, levels, clusters):
+def build_index(pool, endpoint, database, table_name, index_name, metric, num_dimensions, levels, clusters):
     """Create and wait to be ready the vector index"""
 
     table_path = database + "/" + table_name
+
+    if metric == "angular":
+        distance = "cosine"
+    elif metric == "euclidean":
+        distance = "euclidean"
+    elif:
+        print(f"Unsupported metric: {metric}", file=sys.stderr)
+        sys.exit(1)
 
     query = f"""
         ALTER TABLE `{table_path}`
@@ -157,7 +165,7 @@ def build_index(pool, endpoint, database, table_name, index_name, num_dimensions
         GLOBAL USING vector_kmeans_tree
         ON (embedding) COVER (embedding)
         WITH (
-            distance="cosine",
+            distance="{distance}",
             vector_type="float",
             vector_dimension={num_dimensions},
             levels={levels},
@@ -327,8 +335,8 @@ class YDBVector(BaseANN):
         self._index_name = INDEX_BASE_NAME + f"_{metric}_{clusters}x{levels}"
 
         try:
-            self.driver = initialize_ydb_from_env()
-            self.pool = ydb.QuerySessionPool(self.driver)
+            self._driver = initialize_ydb_from_env()
+            self._pool = ydb.QuerySessionPool(self._driver)
         except Exception as e:
             print("Unable to connect to YDB: ", e)
             raise e
@@ -338,23 +346,22 @@ class YDBVector(BaseANN):
 
         # Parse connection string to extract endpoint and database
         parsed_url = urlparse(connection_string)
-        self.endpoint = f"{parsed_url.scheme}://{parsed_url.netloc}"
+        self._endpoint = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
         # Extract database from query parameters
         query_params = parse_qs(parsed_url.query)
         if 'database' not in query_params:
             raise ValueError(f"Database parameter not found in connection string: {connection_string}")
-        self.database = query_params['database'][0]
+        self._database = query_params['database'][0]
 
-        self.full_table_path = self.database + "/" + TABLE_NAME
+        self._full_table_path = self._database + "/" + TABLE_NAME
 
-        self.means_top_size = DEFAULT_MEANS_TOP_SIZE
-
+        self._means_top_size = DEFAULT_MEANS_TOP_SIZE
 
     def fit(self, X):
         num_dimensions = X.shape[1]
 
-        drop_create_table(self.pool, TABLE_NAME, num_dimensions, len(X))
+        drop_create_table(self._pool, TABLE_NAME, num_dimensions, len(X))
 
         print("copying data...")
         sys.stdout.flush()
@@ -366,27 +373,28 @@ class YDBVector(BaseANN):
             vectors_batch.append((i, embedding,))
             num_rows += 1
             if len(vectors_batch) == BATCH_SIZE:
-                send_batch_to_ydb(self.driver.table_client, self.full_table_path, vectors_batch)
+                send_batch_to_ydb(self._driver.table_client, self._full_table_path, vectors_batch)
                 vectors_batch = []
 
         if len(vectors_batch) != 0:
-            send_batch_to_ydb(self.driver.table_client, self.full_table_path, vectors_batch)
+            send_batch_to_ydb(self._driver.table_client, self._full_table_path, vectors_batch)
             vectors_batch = []
 
         insert_elapsed_time_sec = time.time() - insert_start_time_sec
         print("inserted {} rows into table in {:.3f} seconds".format(num_rows, insert_elapsed_time_sec))
 
-        enable_split_by_load(self.pool, TABLE_NAME, num_dimensions, len(X))
+        enable_split_by_load(self._pool, TABLE_NAME, num_dimensions, len(X))
 
         index_start_time_sec = time.time()
         print("building index...")
 
         build_index(
-            self.pool,
-            self.endpoint,
-            self.database,
+            self._pool,
+            self._endpoint,
+            self._database,
             TABLE_NAME,
             self._index_name,
+            self._metric,
             num_dimensions,
             self._method_param['levels'],
             self._method_param['clusters'])
@@ -401,15 +409,24 @@ class YDBVector(BaseANN):
     def query_impl(self, v, n):
         start = time.perf_counter()
         binary_embedding = float_embedding_to_binary(v)
-        query = f"""
-            PRAGMA TablePathPrefix("{self.database}");
 
-            pragma ydb.KMeansTreeSearchTopSize = "{self.means_top_size}";
+        if self._metric == "angular":
+            distance_func = "Knn::CosineDistance"
+        elif self._metric == "euclidean":
+            distance_func = "Knn::EuclideanDistance"
+        elif:
+            print(f"Unsupported metric: {metric}", file=sys.stderr)
+            sys.exit(1)
+
+        query = f"""
+            PRAGMA TablePathPrefix("{self._database}");
+
+            pragma ydb.KMeansTreeSearchTopSize = "{self._means_top_size}";
 
             DECLARE $embedding_list as List<Float>;
             $TargetEmbedding = Knn::ToBinaryStringFloat($embedding_list);
 
-            SELECT id, Knn::CosineDistance(embedding, $TargetEmbedding) as dist
+            SELECT id, {distance_func}(embedding, $TargetEmbedding) as dist
             FROM `{TABLE_NAME}`
             VIEW `{self._index_name}`
             ORDER BY dist ASC
@@ -417,7 +434,7 @@ class YDBVector(BaseANN):
         """
 
         try:
-            result_sets = self.pool.execute_with_retries(
+            result_sets = self._pool.execute_with_retries(
                 query,
                 {
                     "$embedding_list": (v, ydb.ListType(ydb.PrimitiveType.Float)),
@@ -463,7 +480,7 @@ class YDBVector(BaseANN):
         return self.latencies
 
     def set_query_arguments(self, means_top_size):
-        self.means_top_size = means_top_size
+        self._means_top_size = means_top_size
 
     def get_memory_usage(self):
         # TODO: Implement memory usage calculation
@@ -483,8 +500,8 @@ class YDBVector(BaseANN):
                 param_parts.append(f"{k}={v}")
 
         # Add means_top_size if it's set to non-default value
-        if hasattr(self, 'means_top_size') and self.means_top_size != DEFAULT_MEANS_TOP_SIZE:
-            param_parts.append(f"means_top_size={self.means_top_size}")
+        if hasattr(self, 'means_top_size') and self._means_top_size != DEFAULT_MEANS_TOP_SIZE:
+            param_parts.append(f"means_top_size={self._means_top_size}")
 
         # Add parameters if any exist
         if param_parts:
