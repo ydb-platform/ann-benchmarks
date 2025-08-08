@@ -68,7 +68,7 @@ def rel(dataset_distances, run_distances, metrics):
 
 
 def queries_per_second(queries, attrs):
-    return 1.0 / attrs["best_search_time"]
+    return attrs["best_qps"]
 
 
 def percentile_50(times):
