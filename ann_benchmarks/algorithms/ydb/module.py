@@ -19,6 +19,8 @@ import sys
 import time
 import ydb
 
+from typing import Dict, Any, Optional
+
 from urllib.parse import urlparse, parse_qs
 
 from ..base.module import BaseANN
@@ -484,11 +486,6 @@ class YDBVector(BaseANN):
             self._pool, self._database, self._index_name, self._metric, self._means_top_size, v, n)[0]
 
     def batch_query(self, X: np.ndarray, n: int) -> None:
-        if 'threads' in self._method_param:
-            self._batch_threads = int(self._method_param['threads'])
-        else:
-            self._batch_threads = MAX_BATCH_QUERY_THREADS
-
         self._batch_threads = min(self._batch_threads, max(1, len(X)))
         print(f"Batching queries in {self._batch_threads} processes")
 
@@ -538,12 +535,26 @@ class YDBVector(BaseANN):
     def get_batch_latencies(self) -> np.array:
         return self.latencies
 
-    def set_query_arguments(self, means_top_size):
+    def set_query_arguments(self, means_top_size, opts=None, **kwargs):
         self._means_top_size = means_top_size
+
+        options = {}
+        if isinstance(opts, dict):
+            options.update(opts)
+        options.update(kwargs)
+
+        if "threads" in options:
+            self._batch_threads = options["threads"]
 
     def get_memory_usage(self):
         # TODO: Implement memory usage calculation
         return 0
+
+    def get_additional(self) -> dict[str, Any]:
+        d = {}
+        if self._batch_threads:
+            d["threads"] = self._batch_threads
+        return d
 
     def __str__(self):
         result = "YDBVector("

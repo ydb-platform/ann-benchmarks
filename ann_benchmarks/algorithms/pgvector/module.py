@@ -421,18 +421,14 @@ class PGVector(BaseANN):
         print(f"Started pool with {max_size} connections")
 
     def batch_query(self, X: np.array, n: int) -> None:
+        self._batch_threads = min(self._batch_threads, max(1, len(X)))
+
         if USE_MP:
             self.batch_query_mp(X, n)
         else:
             self.batch_query_thread_pool(X, n)
 
     def batch_query_thread_pool_naive(self, X: np.array, n: int) -> None:
-        if 'threads' in self._method_param:
-            self._batch_threads = self._method_param['threads']
-        else:
-            self._batch_threads = MAX_BATCH_QUERY_THREADS
-
-        self._batch_threads = min(self._batch_threads, max(1, len(X)))
         print(f"Batching queries in {self._batch_threads} threads, ef_search={self._ef_search}")
         self.start_pool()
 
@@ -453,12 +449,6 @@ class PGVector(BaseANN):
         self.latencies = latencies
 
     def batch_query_thread_pool(self, X: np.ndarray, n: int) -> None:
-        if 'threads' in self._method_param:
-            self._batch_threads = self._method_param['threads']
-        else:
-            self._batch_threads = MAX_BATCH_QUERY_THREADS
-
-        self._batch_threads = min(self._batch_threads, max(1, len(X)))
         print(f"Batching queries in {self._batch_threads} threads (via ThreadPool), ef_search={self._ef_search}, dummy={USE_SELECT1}")
 
         total = len(X)
@@ -555,7 +545,7 @@ class PGVector(BaseANN):
     def get_batch_latencies(self) -> np.array:
         return self.latencies
 
-    def set_query_arguments(self, ef_search):
+    def set_query_arguments(self, ef_search, opts=None, **kwargs):
         # this will affect all new connections (i.e. from the pool)
         self._ef_search = ef_search
         if not USE_SELECT1:
@@ -566,6 +556,14 @@ class PGVector(BaseANN):
             with self._conn.cursor() as cur:
                 cur.execute(f"SET hnsw.ef_search = {self._ef_search}")
             self._conn.commit()
+
+        options = {}
+        if isinstance(opts, dict):
+            options.update(opts)
+        options.update(kwargs)
+
+        if "threads" in options:
+            self._batch_threads = options["threads"]
 
     def query(self, v, n):
         connection = self._conn

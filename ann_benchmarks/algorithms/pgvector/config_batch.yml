@@ -7,27 +7,15 @@ float:
     module: ann_benchmarks.algorithms.pgvector
     name: pgvector
     run_groups:
-      M-24-1:
-        arg_groups: [{M: 24, efConstruction: 200, threads: 1}]
+      M-24-400:
+        arg_groups: [{M: 24, efConstruction: 200}]
         args: {}
-        query_args: [[400]]
-      M-24-2:
-        arg_groups: [{M: 24, efConstruction: 200, threads: 2}]
-        args: {}
-        query_args: [[400]]
-      M-24-4:
-        arg_groups: [{M: 24, efConstruction: 200, threads: 4}]
-        args: {}
-        query_args: [[400]]
-      M-24-8:
-        arg_groups: [{M: 24, efConstruction: 200, threads: 8}]
-        args: {}
-        query_args: [[400]]
-      M-24-16:
-        arg_groups: [{M: 24, efConstruction: 200, threads: 16}]
-        args: {}
-        query_args: [[400]]
-      M-24-32:
-        arg_groups: [{M: 24, efConstruction: 200, threads: 32}]
-        args: {}
-        query_args: [[400]]
+        query_args:
+          - [10, {threads: 1}]
+          - [10, {threads: 2}]
+          - [10, {threads: 4}]
+          - [10, {threads: 8}]
+          - [10, {threads: 16}]
+          - [10, {threads: 32}]
+          - [10, {threads: 64}]
+          - [10, {threads: 128}]
