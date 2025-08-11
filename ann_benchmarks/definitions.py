@@ -251,18 +251,19 @@ def generate_arg_combinations(run_group: Dict[str, Any], arg_type: str) -> List:
     if arg_type in ["arg_groups", "query_arg_groups"]:
         groups = []
         for arg_group in run_group[arg_type]:
-            if isinstance(arg_group, dict):
-                # Dictionaries need to be expanded into lists in order
-                # for the subsequent call to _generate_combinations to
-                # do the right thing
-                groups.append(_generate_combinations(arg_group))
-            else:
-                groups.append(arg_group)
+            groups.append(_generate_combinations(arg_group) if isinstance(arg_group, dict) else arg_group)
         return _generate_combinations(groups)
-    elif arg_type in ["args", "query_args"]:
+
+    elif arg_type == "args":
         return _generate_combinations(run_group[arg_type])
-    else:
-        return []
+
+    elif arg_type == "query_args":
+        qa = run_group[arg_type]
+        if isinstance(qa, list) and all(isinstance(item, (list, tuple)) for item in qa):
+            return [list(item) for item in qa]  # <- no cartesian, just pass through
+        return _generate_combinations(qa)
+
+    return []
 
 
 def prepare_args(run_group: Dict[str, Any]) -> List:
