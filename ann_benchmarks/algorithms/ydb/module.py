@@ -57,10 +57,9 @@ def query_impl(pool, database, index_name, metric, means_top_size, v, n):
 
         pragma ydb.KMeansTreeSearchTopSize = "{means_top_size}";
 
-        DECLARE $embedding_list as List<Float>;
-        $TargetEmbedding = Knn::ToBinaryStringFloat($embedding_list);
+        DECLARE $embedding as String;
 
-        SELECT id, {distance_func}(embedding, $TargetEmbedding) as dist
+        SELECT id, {distance_func}(embedding, $embedding) as dist
         FROM `{TABLE_NAME}`
         VIEW `{index_name}`
         ORDER BY dist ASC
@@ -71,7 +70,7 @@ def query_impl(pool, database, index_name, metric, means_top_size, v, n):
         result_sets = pool.execute_with_retries(
             query,
             {
-                "$embedding_list": (v, ydb.ListType(ydb.PrimitiveType.Float)),
+                "$embedding": (float_embedding_to_binary(v), ydb.PrimitiveType.String),
             },
         )
 
