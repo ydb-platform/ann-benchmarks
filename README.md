@@ -44,9 +44,15 @@ Make sure `ydb` CLI is in PATH.
 
 # Configuration
 
-Configuration is stored in `ann_benchmarks/algorithms/{ydb,pgvector}/config.yml`. You can configure:
+Configuration is stored in `ann_benchmarks/algorithms/{ydb,pgvector}/{config.yml,config_batch.yml}`. You can configure:
 * a number of configurations to run
 * clusters, levels, kMeansTreeSearchTopSize, etc
+
+If you run with `--batch` option, benchmark will use `config_batch.yml`, otherwise `config.yml`.
+
+# Prebuild datasets
+
+Building 100M wikipedia dataset requires 900 GiB of RAM. Thus, some prebuild datasets can be located [here](https://storage.yandexcloud.net/ann-data). Just download datasets to the data subfolder.
 
 # Running pgvector
 
@@ -79,6 +85,6 @@ Tabular:
 
 Plot:
 ```
-python3 -u plot.py --x-scale logit --y-scale log --dataset cohere-wikipedia-22-12-10M-angular --count 10 [--batch]
+python3 -u plot.py --x-scale logit --dataset cohere-wikipedia-22-12-10M-angular --count 10 [--batch]
 ```
 
