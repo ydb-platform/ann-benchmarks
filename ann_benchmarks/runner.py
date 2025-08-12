@@ -201,7 +201,7 @@ def build_index(algo: BaseANN, X_train: numpy.ndarray) -> Tuple:
     return build_time, index_size
 
 
-def run(definition: Definition, dataset_name: str, count: int, run_count: int, batch: bool, skip_dataload: bool) -> None:
+def run(definition: Definition, dataset_name: str, count: int, run_count: int, batch: bool, skip_dataload: bool, test_multiplier: int) -> None:
     """Run the algorithm benchmarking.
 
     Args:
@@ -211,6 +211,7 @@ def run(definition: Definition, dataset_name: str, count: int, run_count: int, b
         run_count (int): The number of runs.
         batch (bool): If true, runs in batch mode.
         skip_dataload (bool): If true, skips data load phase.
+        test_multiplier (int): Enlarge test size X times.
     """
     algo = instantiate_algorithm(definition)
     assert not definition.query_argument_groups or hasattr(
@@ -221,6 +222,11 @@ algorithm instantiated from it does not implement the set_query_arguments \
 function"""
 
     X_train, X_test, distance = load_and_transform_dataset(dataset_name)
+
+    if test_multiplier > 1:
+        X_test_expanded = numpy.tile(X_test, (test_multiplier, 1))
+        print(f"X_test expanded from {len(X_test)} to {len(X_test_expanded)}")
+        X_test = X_test_expanded
 
     try:
         if hasattr(algo, "supports_prepared_queries"):
@@ -311,6 +317,7 @@ def run_docker(
     timeout: int,
     batch: bool,
     skip_dataload: bool,
+    test_multiplier: int,
     cpu_limit: str,
     mem_limit: Optional[int] = None
 ) -> None:
@@ -336,6 +343,8 @@ def run_docker(
         cmd += ["--batch"]
     if skip_dataload:
         cmd += ["--skip-dataload"]
+    if test_multiplier > 1:
+        cmd += ["--test-multiplier", str(test_multiplier)]
     cmd.append(json.dumps(definition.arguments))
     cmd += [json.dumps(qag) for qag in definition.query_argument_groups]
 

@@ -68,11 +68,11 @@ def run_worker(cpu: int, mem_limit: int, args: argparse.Namespace, queue: multip
     while not queue.empty():
         definition = queue.get()
         if args.local:
-            run(definition, args.dataset, args.count, args.runs, args.batch, args.skip_dataload)
+            run(definition, args.dataset, args.count, args.runs, args.batch, args.skip_dataload, args.test_multiplier)
         else:
             cpu_limit = str(cpu) if not args.batch else f"0-{multiprocessing.cpu_count() - 1}"
 
-            run_docker(definition, args.dataset, args.count, args.runs, args.timeout, args.batch, args.skip_dataload, cpu_limit, mem_limit)
+            run_docker(definition, args.dataset, args.count, args.runs, args.timeout, args.batch, args.skip_dataload, args.test_multiplier, cpu_limit, mem_limit)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -124,6 +124,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--parallelism", type=positive_int, help="Number of Docker containers in parallel", default=1)
 
     parser.add_argument("--skip-dataload", action="store_true", help="If set, algorithms doesn't load the data and just runs queries")
+
+    parser.add_argument("--test-multiplier", type=positive_int, help="Enlarge test size X times", default=1)
+
 
     args = parser.parse_args()
     if args.timeout == -1:
