@@ -169,14 +169,13 @@ def load_and_transform_dataset(dataset_name: str) -> Tuple[
         Tuple: Transformed datasets.
     """
     D, dimension = get_dataset(dataset_name)
-    X_train = numpy.array(D["train"])
-    X_test = numpy.array(D["test"])
     distance = D.attrs["distance"]
 
-    print(f"Got a train set of size ({X_train.shape[0]} * {dimension})")
-    print(f"Got {len(X_test)} queries")
-
     train, test = dataset_transform(D)
+
+    print(f"Got a train set of size ({train.shape[0]} * {dimension})")
+    print(f"Got {len(test)} queries")
+
     return train, test, distance
 
 
