@@ -7,10 +7,34 @@ float:
     module: ann_benchmarks.algorithms.pgvector_flat
     name: pgvector-flat
     run_groups:
-      L1000-50-200:
+      L1000-5-200:
         arg_groups: [{lists: 10000, }]
         args: {}
         query_args:
+          - [5, {threads: 1}]
+          - [5, {threads: 2}]
+          - [5, {threads: 4}]
+          - [5, {threads: 8}]
+          - [5, {threads: 16}]
+          - [5, {threads: 32}]
+          - [5, {threads: 64}]
+          - [5, {threads: 128}]
+          - [10, {threads: 1}]
+          - [10, {threads: 2}]
+          - [10, {threads: 4}]
+          - [10, {threads: 8}]
+          - [10, {threads: 16}]
+          - [10, {threads: 32}]
+          - [10, {threads: 64}]
+          - [10, {threads: 128}]
+          - [20, {threads: 1}]
+          - [20, {threads: 2}]
+          - [20, {threads: 4}]
+          - [20, {threads: 8}]
+          - [20, {threads: 16}]
+          - [20, {threads: 32}]
+          - [20, {threads: 64}]
+          - [20, {threads: 128}]
           - [50, {threads: 1}]
           - [50, {threads: 2}]
           - [50, {threads: 4}]

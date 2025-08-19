@@ -58,7 +58,7 @@ METRIC_PROPERTIES = {
     }
 }
 
-MAX_BATCH_QUERY_THREADS = 32
+MAX_BATCH_QUERY_THREADS = 128
 
 USE_SELECT1 = False
 USE_MP = True
@@ -488,11 +488,6 @@ class PGVector(BaseANN):
         self.latencies = latencies
 
     def batch_query_mp(self, X: np.ndarray, n: int) -> None:
-        if 'threads' in self._method_param:
-            self._batch_threads = int(self._method_param['threads'])
-        else:
-            self._batch_threads = MAX_BATCH_QUERY_THREADS
-
         self._batch_threads = min(self._batch_threads, max(1, len(X)))
         print(f"Batching queries in {self._batch_threads} processes, ef_search={self._ef_search}, dummy={USE_SELECT1}")
 
