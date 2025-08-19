@@ -480,6 +480,9 @@ class YDBVector(BaseANN):
         index_elapsed_time_sec = time.time() - index_start_time_sec
         print("built index in {:.3f} seconds".format(index_elapsed_time_sec))
 
+        # we have a race between reporting index ready and having it actually ready
+        time.sleep(10)
+
 
     def query(self, v, n):
         return query_impl(
