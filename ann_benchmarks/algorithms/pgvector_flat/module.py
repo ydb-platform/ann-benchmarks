@@ -66,7 +66,7 @@ USE_MP = True
 
 def proc_execute_sub_batch(connect_kwargs,
                            query_sql: str,
-                           ef_search: int | None,
+                           probes: int | None,
                            X_chunk: np.ndarray,  # THIS IS COPIED to the child
                            n: int):
     """
@@ -82,8 +82,8 @@ def proc_execute_sub_batch(connect_kwargs,
         latencies_sub = np.empty(len(X_chunk), dtype=float)
 
         with conn.cursor() as cursor:
-            if ef_search is not None and not USE_SELECT1:
-                cursor.execute(f"SET hnsw.ef_search = {ef_search}")
+            if probes is not None and not USE_SELECT1:
+                cursor.execute(f"SET ivfflat.probes = {probes}")
 
             if USE_SELECT1:
                 # Fixed ids 0..n-1 for each query
@@ -264,13 +264,12 @@ class IndexingProgressMonitor:
         else:
             print("    Detailed breakdown of indexing time not available.")
 
-class PGVector(BaseANN):
+class PGVectorFlat(BaseANN):
     def __init__(self, metric, method_param):
         self._metric = metric
-        self._m = method_param['M']
-        self._ef_construction = method_param['efConstruction']
+        self._list_count = method_param['lists']
 
-        self._ef_search = None
+        self._probes = None
 
         self._method_param = method_param
         self._batch_threads = None
@@ -294,7 +293,7 @@ class PGVector(BaseANN):
         if pg_port_str is not None:
             self._psycopg_connect_kwargs['port'] = int(pg_port_str)
 
-        self._psycopg_connect_kwargs["application_name"] = "ann-benchmarks/pgvector"
+        self._psycopg_connect_kwargs["application_name"] = "ann-benchmarks/pgvector-flat"
 
         should_start_service = get_bool_env_var(
             get_pg_param_env_var_name('start_service'),
@@ -375,13 +374,10 @@ class PGVector(BaseANN):
 
         print("creating index...")
         sys.stdout.flush()
+        ops_type = self.get_metric_properties()["ops_type"]
         create_index_str = \
-            "CREATE INDEX ON items USING hnsw (embedding vector_%s_ops) " \
-            "WITH (m = %d, ef_construction = %d)" % (
-                self.get_metric_properties()["ops_type"],
-                self._m,
-                self._ef_construction
-            )
+            f"CREATE INDEX ON items USING ivfflat (embedding vector_{ops_type}_ops) " \
+            f"WITH (lists = {self._list_count})"
         progress_monitor = IndexingProgressMonitor(self._psycopg_connect_kwargs)
         progress_monitor.start_monitoring_thread()
 
@@ -395,8 +391,8 @@ class PGVector(BaseANN):
     def configure_connection(self, conn):
         if not USE_SELECT1:
             pgvector.psycopg.register_vector(conn)
-            if self._ef_search is not None:
-                conn.execute(f"SET hnsw.ef_search = {self._ef_search}")
+            if self._probes is not None:
+                conn.execute(f"SET ivfflat.probes = {self._probes}")
                 conn.commit()
 
     def start_pool(self):
@@ -429,7 +425,7 @@ class PGVector(BaseANN):
             self.batch_query_thread_pool(X, n)
 
     def batch_query_thread_pool_naive(self, X: np.array, n: int) -> None:
-        print(f"Batching queries in {self._batch_threads} threads, ef_search={self._ef_search}")
+        print(f"Batching queries in {self._batch_threads} threads, probes={self._probes}")
         self.start_pool()
 
         results = np.empty((X.shape[0], n), dtype=int)
@@ -449,7 +445,7 @@ class PGVector(BaseANN):
         self.latencies = latencies
 
     def batch_query_thread_pool(self, X: np.ndarray, n: int) -> None:
-        print(f"Batching queries in {self._batch_threads} threads (via ThreadPool), ef_search={self._ef_search}, dummy={USE_SELECT1}")
+        print(f"Batching queries in {self._batch_threads} threads (via ThreadPool), probes={self._probes}, dummy={USE_SELECT1}")
 
         total = len(X)
         results  = np.empty((total, n), dtype=int)
@@ -460,7 +456,7 @@ class PGVector(BaseANN):
 
         connect_kwargs = dict(self._psycopg_connect_kwargs)
         query_sql = self._query
-        ef_search = self._ef_search
+        probes = self._probes
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self._batch_threads) as executor:
             future_to_range = {
@@ -468,7 +464,7 @@ class PGVector(BaseANN):
                     proc_execute_sub_batch,
                     connect_kwargs,
                     query_sql,
-                    ef_search,
+                    probes,
                     X[s:e],      # copied slice to thread
                     n,
                 ): (s, e)
@@ -494,7 +490,7 @@ class PGVector(BaseANN):
             self._batch_threads = MAX_BATCH_QUERY_THREADS
 
         self._batch_threads = min(self._batch_threads, max(1, len(X)))
-        print(f"Batching queries in {self._batch_threads} processes, ef_search={self._ef_search}, dummy={USE_SELECT1}")
+        print(f"Batching queries in {self._batch_threads} processes, probes={self._probes}, dummy={USE_SELECT1}")
 
         try:
             mp.set_start_method("spawn", force=False)
@@ -510,7 +506,7 @@ class PGVector(BaseANN):
 
         connect_kwargs = dict(self._psycopg_connect_kwargs)  # each process connects independently
         query_sql = self._query
-        ef_search = self._ef_search
+        probes = self._probes
 
         ctx = mp.get_context("spawn")
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._batch_threads, mp_context=ctx) as ex:
@@ -519,7 +515,7 @@ class PGVector(BaseANN):
                     proc_execute_sub_batch,
                     connect_kwargs,
                     query_sql,
-                    ef_search,
+                    probes,
                     X[s:e],        # <-- sliced copy to child
                     n,
                 ): (s, e)
@@ -545,16 +541,16 @@ class PGVector(BaseANN):
     def get_batch_latencies(self) -> np.array:
         return self.latencies
 
-    def set_query_arguments(self, ef_search, opts=None, **kwargs):
+    def set_query_arguments(self, probes, opts=None, **kwargs):
         # this will affect all new connections (i.e. from the pool)
-        self._ef_search = ef_search
+        self._probes = probes
         if not USE_SELECT1:
-            self._psycopg_connect_kwargs["options"] = f"-c hnsw.ef_search={self._ef_search}"
+            self._psycopg_connect_kwargs["options"] = f"-c ivfflat.probes={self._probes}"
 
         # update existing "default" connection used in non-batch mode
         if not USE_SELECT1:
             with self._conn.cursor() as cur:
-                cur.execute(f"SET hnsw.ef_search = {self._ef_search}")
+                cur.execute(f"SET ivfflat.probes = {self._probes}")
             self._conn.commit()
 
         options = {}
@@ -593,8 +589,12 @@ class PGVector(BaseANN):
         cur = self._conn.cursor()
         if cur is None:
             return 0
-        cur.execute("COALESCE(pg_indexes_size(to_regclass('public.items')), 0)")
-        return cur.fetchone()[0] / 1024
+        try:
+            cur.execute("SELECT COALESCE(pg_indexes_size(to_regclass('public.items')), 0)")
+            return cur.fetchone()[0] / 1024
+        except:
+            pass
+        return 0
 
     def should_check_results(self):
         return not USE_SELECT1
@@ -608,7 +608,7 @@ class PGVector(BaseANN):
         return d
 
     def __str__(self):
-        result = f"PGVector(m={self._m}, ef_construction={self._ef_construction}, ef_search={self._ef_search}"
+        result = f"PGVectorFlat(lists={self._list_count}"
 
         if self._batch_threads and self._batch_threads != 1:
             result += f", threads={self._batch_threads}"

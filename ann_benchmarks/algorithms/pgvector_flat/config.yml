@@ -1,0 +1,16 @@
+float:
+  any:
+  - base_args: ['@metric']
+    constructor: PGVector
+    disabled: false
+    docker_tag: ann-benchmarks-pgvector
+    module: ann_benchmarks.algorithms.pgvector_flat
+    name: pgvector-flat
+    run_groups:
+      L1000-50-200:
+        arg_groups: [{lists: 10000, }]
+        args: {}
+        query_args:
+          - [50, {}]
+          - [100, {}]
+          - [200, {}]

@@ -1,0 +1,37 @@
+float:
+  any:
+  - base_args: ['@metric']
+    constructor: PGVectorFlat
+    disabled: false
+    docker_tag: ann-benchmarks-pgvector
+    module: ann_benchmarks.algorithms.pgvector_flat
+    name: pgvector-flat
+    run_groups:
+      L1000-50-200:
+        arg_groups: [{lists: 10000, }]
+        args: {}
+        query_args:
+          - [50, {threads: 1}]
+          - [50, {threads: 2}]
+          - [50, {threads: 4}]
+          - [50, {threads: 8}]
+          - [50, {threads: 16}]
+          - [50, {threads: 32}]
+          - [50, {threads: 64}]
+          - [50, {threads: 128}]
+          - [100, {threads: 1}]
+          - [100, {threads: 2}]
+          - [100, {threads: 4}]
+          - [100, {threads: 8}]
+          - [100, {threads: 16}]
+          - [100, {threads: 32}]
+          - [100, {threads: 64}]
+          - [100, {threads: 128}]
+          - [200, {threads: 1}]
+          - [200, {threads: 2}]
+          - [200, {threads: 4}]
+          - [200, {threads: 8}]
+          - [200, {threads: 16}]
+          - [200, {threads: 32}]
+          - [200, {threads: 64}]
+          - [200, {threads: 128}]

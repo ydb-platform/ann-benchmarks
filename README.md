@@ -56,6 +56,7 @@ Building 100M wikipedia dataset requires 900 GiB of RAM. Thus, some prebuild dat
 
 # Running pgvector
 
+Setup environment:
 ```
 export ANN_BENCHMARKS_PG_USER=vec
 export ANN_BENCHMARKS_PG_PASSWORD=vec
@@ -63,8 +64,17 @@ export ANN_BENCHMARKS_PG_DBNAME=vec
 export ANN_BENCHMARKS_PG_HOST=localhost
 export ANN_BENCHMARKS_PG_PORT=5432
 export ANN_BENCHMARKS_PG_START_SERVICE=no
+```
 
-python3 -u run.py --algorithm pgvector --dataset cohere-wikipedia-22-12-10M-angular --local [--batch]
+Run
+
+```
+python3 -u run.py [--skip-dataload] --algorithm pgvector --dataset cohere-wikipedia-22-12-10M-angular --local [--batch]
+```
+
+Run IVFFLAT:
+```
+python3 -u run.py [--skip-dataload] --algorithm pgvector-flat --dataset cohere-wikipedia-22-12-10M-angular --local --batch --runs 5
 ```
 
 # Running YDB
@@ -73,7 +83,7 @@ python3 -u run.py --algorithm pgvector --dataset cohere-wikipedia-22-12-10M-angu
 export YDB_ANONYMOUS_CREDENTIALS=1
 export YDB_CONNECTION_STRING="grpc://<HOST>:2135/?database=/Root/db1"
 
-python3 -u run.py --algorithm ydb --dataset cohere-wikipedia-22-12-10M-angular --local [--batch]
+python3 -u run.py [--skip-dataload] --algorithm ydb --dataset cohere-wikipedia-22-12-10M-angular --local [--batch]
 ```
 
 # Getting results
@@ -87,4 +97,3 @@ Plot:
 ```
 python3 -u plot.py --x-scale logit --dataset cohere-wikipedia-22-12-10M-angular --count 10 [--batch]
 ```
-
