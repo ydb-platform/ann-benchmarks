@@ -20,7 +20,7 @@ from .results import store_results
 
 
 def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.array, distance: str, count: int,
-                         run_count: int, batch: bool) -> Tuple[dict, list]:
+                         run_count: int, batch: bool, skip_duplicate_check: bool) -> Tuple[dict, list]:
     """Run a search query using the provided algorithm and report the results.
 
     Args:
@@ -46,7 +46,7 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
         # a bit dumb but can't be a scalar since of Python's scoping rules
         n_items_processed = [0]
 
-        def single_query(v: numpy.array) -> Tuple[float, List[Tuple[int, float]]]:
+        def single_query(v: numpy.array, skip_duplicate_check) -> Tuple[float, List[Tuple[int, float]]]:
             """Executes a single query on an instantiated, ANN algorithm.
 
             Args:
@@ -69,7 +69,7 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
                 total = time.time() - start
 
             # make sure all returned indices are unique
-            if algo.should_check_results():
+            if not skip_duplicate_check and algo.should_check_results():
                 assert len(candidates) == len(set(candidates)), "Implementation returned duplicated candidates"
 
             candidates = [
@@ -85,7 +85,7 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
                 )
             return (total, candidates)
 
-        def batch_query(X: numpy.array) -> List[Tuple[float, List[Tuple[int, float]]]]:
+        def batch_query(X: numpy.array, skip_duplicate_check) -> List[Tuple[float, List[Tuple[int, float]]]]:
             """Executes a batch of queries on an instantiated, ANN algorithm.
 
             Args:
@@ -112,7 +112,7 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
             else:
                 batch_latencies = [total / float(len(X))] * len(X)
 
-            if algo.should_check_results():
+            if not skip_duplicate_check and algo.should_check_results():
                 # make sure all returned indices are unique
                 for res in results:
                     assert len(res) == len(set(res)), "Implementation returned duplicated candidates"
@@ -124,9 +124,9 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
             return ([(latency, v) for latency, v in zip(batch_latencies, candidates)], total)
 
         if batch:
-            (results, wall_time) = batch_query(X_test)
+            (results, wall_time) = batch_query(X_test, skip_duplicate_check)
         else:
-            results = [single_query(x) for x in X_test]
+            results = [single_query(x, skip_duplicate_check) for x in X_test]
             wall_time = sum(time for time, _ in results)
 
         total_time = sum(time for time, _ in results)
@@ -201,7 +201,7 @@ def build_index(algo: BaseANN, X_train: numpy.ndarray) -> Tuple:
     return build_time, index_size
 
 
-def run(definition: Definition, dataset_name: str, count: int, run_count: int, batch: bool, skip_dataload: bool, test_multiplier: int) -> None:
+def run(definition: Definition, dataset_name: str, count: int, run_count: int, batch: bool, skip_dataload: bool, test_multiplier: int, skip_duplicate_check: bool) -> None:
     """Run the algorithm benchmarking.
 
     Args:
@@ -245,7 +245,7 @@ function"""
             if query_arguments:
                 algo.set_query_arguments(*query_arguments)
 
-            descriptor, results = run_individual_query(algo, X_train, X_test, distance, count, run_count, batch)
+            descriptor, results = run_individual_query(algo, X_train, X_test, distance, count, run_count, batch, skip_duplicate_check)
 
             descriptor.update({
                 "build_time": build_time,
@@ -306,7 +306,7 @@ def run_from_cmdline():
         query_argument_groups=query_args,
         disabled=False,
     )
-    run(definition, args.dataset, args.count, args.runs, args.batch)
+    run(definition, args.dataset, args.count, args.runs, args.batch, args.skip_duplicate_check)
 
 
 def run_docker(
@@ -318,6 +318,7 @@ def run_docker(
     batch: bool,
     skip_dataload: bool,
     test_multiplier: int,
+    skip_duplicate_check: bool,
     cpu_limit: str,
     mem_limit: Optional[int] = None
 ) -> None:
@@ -343,6 +344,8 @@ def run_docker(
         cmd += ["--batch"]
     if skip_dataload:
         cmd += ["--skip-dataload"]
+    if skip_duplicate_check:
+        cmd += ["--skip-duplicate-check"]
     if test_multiplier > 1:
         cmd += ["--test-multiplier", str(test_multiplier)]
     cmd.append(json.dumps(definition.arguments))
