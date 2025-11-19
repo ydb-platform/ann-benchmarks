@@ -206,7 +206,7 @@ def drop_create_table(pool, table_name, num_dimensions, n):
     print(f"Table '{table_name}' created")
 
 
-def enable_split_by_load(pool, table_name, num_dimensions, n):
+def set_partionining_policy(pool, table_name, index_name, num_dimensions, n):
     """Enables split by load"""
 
     min_partitions, max_partitions = get_min_max_partitions(num_dimensions, n)
@@ -215,6 +215,32 @@ def enable_split_by_load(pool, table_name, num_dimensions, n):
         pool.execute_with_retries(f"""
             ALTER TABLE `{table_name}` SET (
                 AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_partitions},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_partitions}
+            );
+        """)
+        print(f"Split by load enabled for table '{table_name}'")
+
+        # TODO: move 30 to constants
+
+        index_table1 = f"{table_name}/{index_name}/indexImplLevelTable"
+        pool.execute_with_retries(f"""
+            ALTER TABLE `{index_table1}` SET (
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_SIZE = ENABLED,
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = 30,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_partitions},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_partitions}
+            );
+        """)
+        print(f"Split by load enabled for table '{index_table1}'")
+
+        index_table2 = f"{table_name}/{index_name}/indexImplPostingTable"
+        pool.execute_with_retries(f"""
+            ALTER TABLE `{index_table2}` SET (
+                AUTO_PARTITIONING_BY_SIZE = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = 2048,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_partitions},
                 AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_partitions}
             );
@@ -461,8 +487,6 @@ class YDBVector(BaseANN):
         insert_elapsed_time_sec = time.time() - insert_start_time_sec
         print("inserted {} rows into table in {:.3f} seconds".format(num_rows, insert_elapsed_time_sec))
 
-        enable_split_by_load(self._pool, TABLE_NAME, num_dimensions, len(X))
-
         index_start_time_sec = time.time()
         print("building index...")
 
@@ -479,6 +503,8 @@ class YDBVector(BaseANN):
 
         index_elapsed_time_sec = time.time() - index_start_time_sec
         print("built index in {:.3f} seconds".format(index_elapsed_time_sec))
+
+        set_partionining_policy(self._pool, TABLE_NAME, self._index_name, num_dimensions, len(X))
 
         # we have a race between reporting index ready and having it actually ready
         time.sleep(10)
