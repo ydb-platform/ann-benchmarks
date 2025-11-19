@@ -695,6 +695,9 @@ DATASETS: Dict[str, Callable[[str], None]] = {
     # 50K requests
     "cohere-wikipedia-22-12-10M-angular-50K": lambda out_fn: cohere_wikipedia_22_12(out_fn, 10_000_000, 50_000, "angular"),
 
+    # 500K requests
+    "cohere-wikipedia-22-12-10M-angular-500K": lambda out_fn: cohere_wikipedia_22_12(out_fn, 10_000_000, 50_0000, "angular"),
+
     # below are cohere-wikipedia-22-12 datasets with 1M requests
 
     "cohere-wikipedia-22-12-10k-angular-1M": lambda out_fn: cohere_wikipedia_22_12(out_fn, 10_000, 1_000_000, "angular"),
