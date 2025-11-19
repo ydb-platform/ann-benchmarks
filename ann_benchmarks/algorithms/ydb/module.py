@@ -87,7 +87,8 @@ def query_impl(pool, database, index_name, metric, means_top_size, v, n):
 
 def proc_execute_sub_batch(database,
                            metric,
-                           index_name,
+                           base_index_name,
+                           index_count,
                            means_top_size,
                            X_chunk: np.ndarray,  # THIS IS COPIED to the child
                            n: int):
@@ -109,9 +110,15 @@ def proc_execute_sub_batch(database,
     latencies_sub = np.empty(len(X_chunk), dtype=float)
 
     for j, v in enumerate(X_chunk):
+        use_index_name = base_index_name
+        if index_count > 1:
+            idx = random.randrange(index_count) + 1
+            if idx > 1:
+                use_index_name = base_index_name + f"_i{idx}"
+
         t0 = time.perf_counter()
         result = query_impl(
-            pool, database, index_name, metric, means_top_size, v, n)[0]
+            pool, database, use_index_name, metric, means_top_size, v, n)[0]
         results_sub[j, :] = result
         latencies_sub[j] = time.perf_counter() - t0
 
@@ -228,7 +235,7 @@ def set_partionining_policy(pool, table_name, index_name, num_dimensions, n):
             ALTER TABLE `{index_table1}` SET (
                 AUTO_PARTITIONING_BY_LOAD = ENABLED,
                 AUTO_PARTITIONING_BY_SIZE = ENABLED,
-                AUTO_PARTITIONING_PARTITION_SIZE_MB = 30,
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = 10,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_partitions},
                 AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_partitions}
             );
@@ -240,7 +247,7 @@ def set_partionining_policy(pool, table_name, index_name, num_dimensions, n):
             ALTER TABLE `{index_table2}` SET (
                 AUTO_PARTITIONING_BY_SIZE = ENABLED,
                 AUTO_PARTITIONING_BY_LOAD = ENABLED,
-                AUTO_PARTITIONING_PARTITION_SIZE_MB = 2048,
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = 256,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_partitions},
                 AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_partitions}
             );
@@ -252,6 +259,8 @@ def set_partionining_policy(pool, table_name, index_name, num_dimensions, n):
 
 def build_index(pool, endpoint, database, table_name, index_name, metric, num_dimensions, levels, clusters):
     """Create and wait to be ready the vector index"""
+
+    print(f"Create index '{index_name}' for table '{table_name}'")
 
     table_path = database + "/" + table_name
 
@@ -290,7 +299,11 @@ def build_index(pool, endpoint, database, table_name, index_name, metric, num_di
         print("Failed to create index {}: {}".format(index_name, e), file=sys.stderr)
         sys.exit(1)
 
-    print("Waiting for indices to be ready...")
+    wait_all_indices(endpoint, database, index_name)
+
+
+def wait_all_indices(endpoint, database, index_name):
+    print(f"Waiting for {index_name} to be ready...")
 
     # TODO: use SDK? I don't see that it currently supports this
     # TODO: since we use CLI, we have a strong issue with setting auth properly
@@ -363,12 +376,8 @@ def build_index(pool, endpoint, database, table_name, index_name, metric, num_di
             all_ready = True
 
         if all_ready:
-            time.sleep(10) # hack, because we have a small issue with reporting OK
-            print("Indices created")
+            time.sleep(2) # hack, because we have a small issue with reporting OK
             break
-        time.sleep(10)
-
-    print("Indices are ready")
 
 
 def initialize_ydb_from_env():
@@ -436,6 +445,7 @@ class YDBVector(BaseANN):
         levels = self._method_param['levels']
         clusters = self._method_param['clusters']
 
+        self._index_count = self._method_param.get('index_count', 1)
         self._index_name = INDEX_BASE_NAME + f"_{metric}_{clusters}x{levels}"
 
         try:
@@ -490,29 +500,44 @@ class YDBVector(BaseANN):
         index_start_time_sec = time.time()
         print("building index...")
 
-        build_index(
-            self._pool,
-            self._endpoint,
-            self._database,
-            TABLE_NAME,
-            self._index_name,
-            self._metric,
-            num_dimensions,
-            self._method_param['levels'],
-            self._method_param['clusters'])
+        for i in range(1, self._index_count + 1):
+            index_name = self._index_name
+            if i > 1:
+                index_name += f"_i{i}"
+            build_index(
+                self._pool,
+                self._endpoint,
+                self._database,
+                TABLE_NAME,
+                index_name,
+                self._metric,
+                num_dimensions,
+                self._method_param['levels'],
+                self._method_param['clusters'])
+
+        # we have a race between reporting index ready and having it actually ready
+        print("Indices are ready")
+        time.sleep(10)
+
+        for i in range(1, self._index_count + 1):
+            index_name = self._index_name
+            if i > 1:
+                index_name += f"_i{i}"
+            set_partionining_policy(self._pool, TABLE_NAME, index_name, num_dimensions, len(X))
 
         index_elapsed_time_sec = time.time() - index_start_time_sec
         print("built index in {:.3f} seconds".format(index_elapsed_time_sec))
 
-        set_partionining_policy(self._pool, TABLE_NAME, self._index_name, num_dimensions, len(X))
-
-        # we have a race between reporting index ready and having it actually ready
-        time.sleep(10)
-
 
     def query(self, v, n):
+        index_name = self._index_name
+        if self._index_count > 1:
+            idx = random.randrange(self._index_count) + 1
+            if idx > 1:
+                index_name = self._index_name + f"_i{idx}"
+
         return query_impl(
-            self._pool, self._database, self._index_name, self._metric, self._means_top_size, v, n)[0]
+            self._pool, self._database, index_name, self._metric, self._means_top_size, v, n)[0]
 
     def batch_query(self, X: np.ndarray, n: int) -> None:
         self._batch_threads = min(self._batch_threads, max(1, len(X)))
@@ -538,6 +563,7 @@ class YDBVector(BaseANN):
                     self._database,
                     self._metric,
                     self._index_name,
+                    self._index_count,
                     self._means_top_size,
                     X[s:e],        # <-- sliced copy to child
                     n,
