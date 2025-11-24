@@ -138,10 +138,13 @@ def proc_execute_sub_batch(database,
     Executes queries for the rows in X_chunk and returns (results_sub, latencies_sub).
     """
 
-    driver = ydb.Driver(
-        connection_string=os.environ["YDB_CONNECTION_STRING"],
+    driver_config = ydb.DriverConfig.default_from_connection_string(
+        os.environ["YDB_CONNECTION_STRING"],
         credentials=ydb.credentials_from_env_variables(),
+        use_all_nodes=True
     )
+
+    driver = ydb.Driver(driver_config=driver_config)
 
     # Wait for the driver to become active
     driver.wait(timeout=5)
@@ -424,10 +427,13 @@ def wait_all_indices(endpoint, database, index_name):
 
 def initialize_ydb_from_env():
     """Initialize YDB driver from env"""
-    driver = ydb.Driver(
-        connection_string=os.environ["YDB_CONNECTION_STRING"],
+    driver_config = ydb.DriverConfig.default_from_connection_string(
+        os.environ["YDB_CONNECTION_STRING"],
         credentials=ydb.credentials_from_env_variables(),
+        use_all_nodes=True
     )
+
+    driver = ydb.Driver(driver_config=driver_config)
 
     # Wait for the driver to become active
     driver.wait(timeout=5)
