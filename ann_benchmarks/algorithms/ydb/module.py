@@ -7,6 +7,7 @@ https://ydb.tech/docs/en/recipes/ydb-sdk/auth-env
 """
 
 import concurrent.futures
+import datetime
 import json
 import math
 import multiprocessing as mp
@@ -17,6 +18,8 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
+import uuid
 import ydb
 
 from typing import Dict, Any, Optional
@@ -42,7 +45,7 @@ DEFAULT_MEANS_TOP_SIZE = 3
 MAX_BATCH_QUERY_THREADS = 32
 
 
-def query_impl(pool, database, index_name, metric, means_top_size, v, n):
+def query_impl(pool, database, use_stale_reads, index_name, metric, means_top_size, v, n):
     start = time.perf_counter()
     binary_embedding = float_embedding_to_binary(v)
 
@@ -68,25 +71,64 @@ def query_impl(pool, database, index_name, metric, means_top_size, v, n):
         LIMIT {n};
     """
 
-    try:
-        result_sets = pool.execute_with_retries(
-            query,
-            {
-                "$embedding": (float_embedding_to_binary(v), ydb.PrimitiveType.String),
-            },
-        )
+    params = {
+        "$embedding": (float_embedding_to_binary(v), ydb.PrimitiveType.String),
+    }
 
-        rows = result_sets[0].rows
-        ids = [row.id for row in rows]
-        elapsed = time.perf_counter() - start
+    def ydb_to_primitive_types(
+        ydb_row: dict[str, Any]
+    ) -> dict[str, Any]:
+        prepared_row = {}
+        for key, value in ydb_row.items():
+            if isinstance(value, (datetime.datetime, datetime.date)):
+                value = value.replace(tzinfo=datetime.timezone.utc)
+                # convert to microseconds
+                prepared_row[key] = int(value.timestamp() * 1e6)
+            elif isinstance(value, uuid.UUID):
+                prepared_row[key] = str(value)
+            elif isinstance(value, datetime.timedelta):
+                prepared_row[key] = value.microseconds
+            else:
+                prepared_row[key] = value
+        return prepared_row
+
+    def ydb_to_primitive_types_iter(stream):
+        yield from map(ydb_to_primitive_types, stream)
+
+    def iter_ydb_rows(stream):
+        for stream_part in stream:
+            if isinstance(stream_part, ydb.ScanQueryResult):
+                result_set = stream_part.result_set
+            else:
+                result_set = stream_part
+            for row in ydb_to_primitive_types_iter(result_set.rows):
+                yield row
+
+    def callee(session: ydb.QuerySession):
+        response = session.transaction(ydb.QueryStaleReadOnly()).execute(query, params, commit_tx=True)
+        return iter_ydb_rows(response)
+
+    try:
+        if use_stale_reads:
+            rows = pool.retry_operation_sync(callee, ydb.RetrySettings(max_retries=10, idempotent=True))
+            ids = [row["id"] for row in rows]
+            elapsed = time.perf_counter() - start
+            return ids, elapsed
+        else:
+            result_sets = pool.execute_with_retries(query, params)
+            rows = result_sets[0].rows
+            ids = [row.id for row in rows]
+            elapsed = time.perf_counter() - start
         return ids, elapsed
     except Exception as e:
         print("Query failed: ", e)
+        traceback.print_exc()
         raise e
 
 
 def proc_execute_sub_batch(database,
                            metric,
+                           use_stale_reads,
                            base_index_name,
                            index_count,
                            means_top_size,
@@ -118,7 +160,7 @@ def proc_execute_sub_batch(database,
 
         t0 = time.perf_counter()
         result = query_impl(
-            pool, database, use_index_name, metric, means_top_size, v, n)[0]
+            pool, database, use_stale_reads, use_index_name, metric, means_top_size, v, n)[0]
         results_sub[j, :] = result
         latencies_sub[j] = time.perf_counter() - t0
 
@@ -462,6 +504,10 @@ class YDBVector(BaseANN):
         parsed_url = urlparse(connection_string)
         self._endpoint = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
+        self._use_stale_reads = False
+        if "YDB_STALE_READS" in os.environ:
+            self._use_stale_reads = os.environ["YDB_STALE_READS"] == "1"
+
         # Extract database from query parameters
         query_params = parse_qs(parsed_url.query)
         if 'database' not in query_params:
@@ -537,7 +583,7 @@ class YDBVector(BaseANN):
                 index_name = self._index_name + f"_i{idx}"
 
         return query_impl(
-            self._pool, self._database, index_name, self._metric, self._means_top_size, v, n)[0]
+            self._pool, self._database, self._use_stale_reads, index_name, self._metric, self._means_top_size, v, n)[0]
 
     def batch_query(self, X: np.ndarray, n: int) -> None:
         self._batch_threads = min(self._batch_threads, max(1, len(X)))
@@ -562,6 +608,7 @@ class YDBVector(BaseANN):
                     proc_execute_sub_batch,
                     self._database,
                     self._metric,
+                    self._use_stale_reads,
                     self._index_name,
                     self._index_count,
                     self._means_top_size,
