@@ -46,7 +46,7 @@ Make sure `ydb` CLI is in PATH.
 
 Configuration is stored in `ann_benchmarks/algorithms/{ydb,pgvector}/{config.yml,config_batch.yml}`. You can configure:
 * a number of configurations to run
-* clusters, levels, kMeansTreeSearchTopSize, etc
+* clusters, levels, overlap_clusters, etc
 
 If you run with `--batch` option, benchmark will use `config_batch.yml`, otherwise `config.yml`.
 

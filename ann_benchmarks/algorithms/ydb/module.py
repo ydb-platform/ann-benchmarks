@@ -40,12 +40,10 @@ MAX_RETRIES = 100
 BACKOFF_MILLIS = 10
 BACKOFF_CEILING = 5
 
-DEFAULT_MEANS_TOP_SIZE = 3
-
 MAX_BATCH_QUERY_THREADS = 32
 
 
-def query_impl(pool, database, use_stale_reads, index_name, metric, means_top_size, v, n):
+def query_impl(pool, database, use_stale_reads, index_name, metric, v, n):
     start = time.perf_counter()
     binary_embedding = float_embedding_to_binary(v)
 
@@ -59,8 +57,6 @@ def query_impl(pool, database, use_stale_reads, index_name, metric, means_top_si
 
     query = f"""
         PRAGMA TablePathPrefix("{database}");
-
-        pragma ydb.KMeansTreeSearchTopSize = "{means_top_size}";
 
         DECLARE $embedding as String;
 
@@ -131,7 +127,6 @@ def proc_execute_sub_batch(database,
                            use_stale_reads,
                            base_index_name,
                            index_count,
-                           means_top_size,
                            X_chunk: np.ndarray,  # THIS IS COPIED to the child
                            n: int):
     """
@@ -163,7 +158,7 @@ def proc_execute_sub_batch(database,
 
         t0 = time.perf_counter()
         result = query_impl(
-            pool, database, use_stale_reads, use_index_name, metric, means_top_size, v, n)[0]
+            pool, database, use_stale_reads, use_index_name, metric, v, n)[0]
         results_sub[j, :] = result
         latencies_sub[j] = time.perf_counter() - t0
 
@@ -302,7 +297,7 @@ def set_partionining_policy(pool, table_name, index_name, num_dimensions, n):
         pass
 
 
-def build_index(pool, endpoint, database, table_name, index_name, metric, num_dimensions, levels, clusters):
+def build_index(pool, endpoint, database, table_name, index_name, metric, num_dimensions, levels, clusters, overlap_clusters):
     """Create and wait to be ready the vector index"""
 
     print(f"Create index '{index_name}' for table '{table_name}'")
@@ -327,7 +322,8 @@ def build_index(pool, endpoint, database, table_name, index_name, metric, num_di
             vector_type="float",
             vector_dimension={num_dimensions},
             levels={levels},
-            clusters={clusters}
+            clusters={clusters},
+            overlap_clusters={overlap_clusters}
         );
     """
 
@@ -492,9 +488,10 @@ class YDBVector(BaseANN):
 
         levels = self._method_param['levels']
         clusters = self._method_param['clusters']
+        overlap_clusters = self._method_param['overlap_clusters']
 
         self._index_count = self._method_param.get('index_count', 1)
-        self._index_name = INDEX_BASE_NAME + f"_{metric}_{clusters}x{levels}"
+        self._index_name = INDEX_BASE_NAME + f"_{metric}_{clusters}x{levels}x{overlap_clusters}"
 
         try:
             self._driver = initialize_ydb_from_env()
@@ -521,8 +518,6 @@ class YDBVector(BaseANN):
         self._database = query_params['database'][0]
 
         self._full_table_path = self._database + "/" + TABLE_NAME
-
-        self._means_top_size = DEFAULT_MEANS_TOP_SIZE
 
     def fit(self, X):
         num_dimensions = X.shape[1]
@@ -565,7 +560,8 @@ class YDBVector(BaseANN):
                 self._metric,
                 num_dimensions,
                 self._method_param['levels'],
-                self._method_param['clusters'])
+                self._method_param['clusters'],
+                self._method_param['overlap_clusters'])
 
         # we have a race between reporting index ready and having it actually ready
         print("Indices are ready")
@@ -589,7 +585,7 @@ class YDBVector(BaseANN):
                 index_name = self._index_name + f"_i{idx}"
 
         return query_impl(
-            self._pool, self._database, self._use_stale_reads, index_name, self._metric, self._means_top_size, v, n)[0]
+            self._pool, self._database, self._use_stale_reads, index_name, self._metric, v, n)[0]
 
     def batch_query(self, X: np.ndarray, n: int) -> None:
         self._batch_threads = min(self._batch_threads, max(1, len(X)))
@@ -617,7 +613,6 @@ class YDBVector(BaseANN):
                     self._use_stale_reads,
                     self._index_name,
                     self._index_count,
-                    self._means_top_size,
                     X[s:e],        # <-- sliced copy to child
                     n,
                 ): (s, e)
@@ -643,9 +638,7 @@ class YDBVector(BaseANN):
     def get_batch_latencies(self) -> np.array:
         return self.latencies
 
-    def set_query_arguments(self, means_top_size, opts=None, **kwargs):
-        self._means_top_size = means_top_size
-
+    def set_query_arguments(self, opts=None, **kwargs):
         options = {}
         if isinstance(opts, dict):
             options.update(opts)
@@ -676,10 +669,6 @@ class YDBVector(BaseANN):
         if self._method_param:
             for k, v in self._method_param.items():
                 param_parts.append(f"{k}={v}")
-
-        # Add means_top_size if it's set to non-default value
-        if hasattr(self, '_means_top_size') and self._means_top_size != DEFAULT_MEANS_TOP_SIZE:
-            param_parts.append(f"means_top_size={self._means_top_size}")
 
         # Add parameters if any exist
         if param_parts:

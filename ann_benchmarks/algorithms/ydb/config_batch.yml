@@ -7,15 +7,15 @@ float:
     module: ann_benchmarks.algorithms.ydb
     name: ydb
     run_groups:
-      C50-l3-30:
-        arg_groups: [{clusters: 50, levels: 3}]
+      C50-l3-o3:
+        arg_groups: [{clusters: 50, levels: 3, overlap_clusters: 3, index_count: 1}]
         args: {}
         query_args:
-          - [30, {threads: 1}]
-          - [30, {threads: 2}]
-          - [30, {threads: 4}]
-          - [30, {threads: 8}]
-          - [30, {threads: 16}]
-          - [30, {threads: 32}]
-          - [30, {threads: 64}]
-          - [30, {threads: 128}]
+          - [{threads: 1}]
+          - [{threads: 2}]
+          - [{threads: 4}]
+          - [{threads: 8}]
+          - [{threads: 16}]
+          - [{threads: 32}]
+          - [{threads: 64}]
+          - [{threads: 128}]
