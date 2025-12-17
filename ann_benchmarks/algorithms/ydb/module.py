@@ -41,6 +41,7 @@ BACKOFF_MILLIS = 10
 BACKOFF_CEILING = 5
 
 DEFAULT_MEANS_TOP_SIZE = 3
+READ_REPLICAS_DEFAULT_COUNT = 0
 
 MAX_BATCH_QUERY_THREADS = 32
 
@@ -302,6 +303,29 @@ def set_partionining_policy(pool, table_name, index_name, num_dimensions, n):
         pass
 
 
+def set_read_replicas(pool, table_name, index_name, read_replicas):
+    """Configures read replicas for index tables"""
+
+    try:
+        index_table1 = f"{table_name}/{index_name}/indexImplLevelTable"
+        pool.execute_with_retries(f"""
+            ALTER TABLE `{index_table1}` SET (
+                READ_REPLICAS_SETTINGS = "PER_AZ:{read_replicas}"
+            );
+        """)
+        print(f"Read replicas set to {read_replicas} for table '{index_table1}'")
+
+        index_table2 = f"{table_name}/{index_name}/indexImplPostingTable"
+        pool.execute_with_retries(f"""
+            ALTER TABLE `{index_table2}` SET (
+                READ_REPLICAS_SETTINGS = "PER_AZ:{read_replicas}"
+            );
+        """)
+        print(f"Read replicas set to {read_replicas} for table '{index_table2}'")
+    except:
+        pass
+
+
 def build_index(pool, endpoint, database, table_name, index_name, metric, num_dimensions, levels, clusters, overlap_clusters):
     """Create and wait to be ready the vector index"""
 
@@ -513,8 +537,6 @@ class YDBVector(BaseANN):
         self._endpoint = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
         self._use_stale_reads = False
-        if "YDB_STALE_READS" in os.environ:
-            self._use_stale_reads = os.environ["YDB_STALE_READS"] == "1"
 
         # Extract database from query parameters
         query_params = parse_qs(parsed_url.query)
@@ -525,9 +547,14 @@ class YDBVector(BaseANN):
         self._full_table_path = self._database + "/" + TABLE_NAME
 
         self._means_top_size = DEFAULT_MEANS_TOP_SIZE
+        self._read_replicas = READ_REPLICAS_DEFAULT_COUNT
+        self._num_dimensions = None
+        self._num_vectors = None
 
     def fit(self, X):
         num_dimensions = X.shape[1]
+        self._num_dimensions = num_dimensions
+        self._num_vectors = len(X)
 
         drop_create_table(self._pool, TABLE_NAME, num_dimensions, len(X))
 
@@ -657,6 +684,22 @@ class YDBVector(BaseANN):
         if "threads" in options:
             self._batch_threads = options["threads"]
 
+        if "read_replicas" in options:
+            new_read_replicas = options["read_replicas"]
+            if new_read_replicas != self._read_replicas:
+                self._read_replicas = new_read_replicas
+                if self._read_replicas > 0:
+                    self._use_stale_reads = True
+                else:
+                    self._use_stale_reads = False
+                # Apply new read_replicas setting to index tables
+                for i in range(1, self._index_count + 1):
+                    index_name = self._index_name
+                    if i > 1:
+                        index_name += f"_i{i}"
+                    set_read_replicas(
+                        self._pool, TABLE_NAME, index_name, self._read_replicas)
+
     def get_memory_usage(self):
         # TODO: Implement memory usage calculation
         return 0
@@ -683,6 +726,10 @@ class YDBVector(BaseANN):
         # Add means_top_size if it's set to non-default value
         if hasattr(self, '_means_top_size') and self._means_top_size != DEFAULT_MEANS_TOP_SIZE:
             param_parts.append(f"means_top_size={self._means_top_size}")
+
+        # Add read_replicas if it's set to non-default value
+        if hasattr(self, '_read_replicas') and self._read_replicas != READ_REPLICAS_DEFAULT_COUNT:
+            param_parts.append(f"read_replicas={self._read_replicas}")
 
         # Add parameters if any exist
         if param_parts:

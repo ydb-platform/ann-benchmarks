@@ -86,10 +86,7 @@ export YDB_CONNECTION_STRING="grpc://<HOST>:2135/?database=/Root/db1"
 python3 -u run.py [--skip-dataload] --algorithm ydb --dataset cohere-wikipedia-22-12-10M-angular --local [--batch]
 ```
 
-To allow stale reads (followers / read replicas), please
-```
-export YDB_STALE_READS=1
-```
+To allow stale reads (followers / read replicas), please set read_replicas argument.
 
 # Getting results
 
