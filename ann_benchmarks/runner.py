@@ -19,6 +19,51 @@ from .distance import dataset_transform, metrics
 from .results import store_results
 
 
+def check_for_duplicates(candidates: list, search_vector: numpy.array, count: int,
+                         batch_index: Optional[int] = None, batch_size: Optional[int] = None) -> None:
+    """Check if candidates contain duplicates and raise AssertionError with detailed info if they do.
+
+    Args:
+        candidates: List of candidate indices returned by the algorithm
+        search_vector: The query vector that was searched
+        count: The number of results that were requested
+        batch_index: Optional index in batch, used for batch queries
+        batch_size: Optional total batch size, used for batch queries
+
+    Raises:
+        AssertionError: If duplicates are found, with detailed debug information
+    """
+    if len(candidates) == len(set(candidates)):
+        return  # No duplicates, all good
+
+    # Find duplicates
+    seen = set()
+    duplicates = []
+    for idx in candidates:
+        if idx in seen:
+            duplicates.append(idx)
+        seen.add(idx)
+
+    # Build error message
+    error_msg = f"Implementation returned duplicated candidates"
+    if batch_index is not None:
+        error_msg += " in batch query"
+    error_msg += "!\n"
+
+    if batch_index is not None:
+        error_msg += f"  Query index in batch: {batch_index}/{batch_size}\n"
+
+    error_msg += (
+        f"  Total candidates: {len(candidates)}\n"
+        f"  Unique candidates: {len(set(candidates))}\n"
+        f"  Duplicate vector IDs: {duplicates}\n"
+        f"  Search vector (first 10 dims): {search_vector[:10] if len(search_vector) > 10 else search_vector}\n"
+        f"  Requested count: {count}"
+    )
+
+    assert False, error_msg
+
+
 def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.array, distance: str, count: int,
                          run_count: int, batch: bool, skip_duplicate_check: bool) -> Tuple[dict, list]:
     """Run a search query using the provided algorithm and report the results.
@@ -70,7 +115,7 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
 
             # make sure all returned indices are unique
             if not skip_duplicate_check and algo.should_check_results():
-                assert len(candidates) == len(set(candidates)), "Implementation returned duplicated candidates"
+                check_for_duplicates(candidates, v, count)
 
             candidates = [
                 (int(idx), float(metrics[distance].distance(v, X_train[idx]))) for idx in candidates  # noqa
@@ -114,8 +159,8 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
 
             if not skip_duplicate_check and algo.should_check_results():
                 # make sure all returned indices are unique
-                for res in results:
-                    assert len(res) == len(set(res)), "Implementation returned duplicated candidates"
+                for i, res in enumerate(results):
+                    check_for_duplicates(res, X[i], count, batch_index=i, batch_size=len(X))
 
             candidates = [
                 [(int(idx), float(metrics[distance].distance(v, X_train[idx]))) for idx in single_results]  # noqa
