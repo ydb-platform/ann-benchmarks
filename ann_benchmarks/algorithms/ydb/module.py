@@ -274,7 +274,12 @@ def set_partionining_policy(pool, table_name, index_name, num_dimensions, n):
         """)
         print(f"Split by load enabled for table '{table_name}'")
 
-        # TODO: move 30 to constants
+        # TODO: move values for AUTO_PARTITIONING_PARTITION_SIZE_MB to constants
+        # as well as multiplyer
+
+        # Indices might split by load, give them more space than
+        # just calculated by size count
+        index_max_partitions = max_partitions * 5
 
         index_table1 = f"{table_name}/{index_name}/indexImplLevelTable"
         pool.execute_with_retries(f"""
@@ -283,7 +288,7 @@ def set_partionining_policy(pool, table_name, index_name, num_dimensions, n):
                 AUTO_PARTITIONING_BY_SIZE = ENABLED,
                 AUTO_PARTITIONING_PARTITION_SIZE_MB = 10,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_partitions},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_partitions}
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {index_max_partitions}
             );
         """)
         print(f"Split by load enabled for table '{index_table1}'")
@@ -295,7 +300,7 @@ def set_partionining_policy(pool, table_name, index_name, num_dimensions, n):
                 AUTO_PARTITIONING_BY_LOAD = ENABLED,
                 AUTO_PARTITIONING_PARTITION_SIZE_MB = 256,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_partitions},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_partitions}
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {index_max_partitions}
             );
         """)
         print(f"Split by load enabled for table '{table_name}'")
