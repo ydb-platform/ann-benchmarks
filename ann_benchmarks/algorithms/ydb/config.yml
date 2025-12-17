@@ -10,4 +10,4 @@ float:
       C50-l3-o3:
         arg_groups: [{clusters: 50, levels: 3, overlap_clusters: 3}]
         args: {}
-        query_args: []
+        query_args: [[3, 5, 10]]
