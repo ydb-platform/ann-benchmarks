@@ -108,12 +108,12 @@ def query_impl(pool, database, use_stale_reads, index_name, metric, means_top_si
 
     def callee(session: ydb.QuerySession):
         response = session.transaction(ydb.QueryStaleReadOnly()).execute(query, params, commit_tx=True)
-        return iter_ydb_rows(response)
+        # Consume iterator inside callee so errors are caught by retry
+        return [row["id"] for row in iter_ydb_rows(response)]
 
     try:
         if use_stale_reads:
-            rows = pool.retry_operation_sync(callee, ydb.RetrySettings(max_retries=10, idempotent=True))
-            ids = [row["id"] for row in rows]
+            ids = pool.retry_operation_sync(callee, ydb.RetrySettings(max_retries=10, idempotent=True))
             elapsed = time.perf_counter() - start
             return ids, elapsed
         else:
@@ -156,20 +156,24 @@ def proc_execute_sub_batch(database,
     results_sub   = np.empty((len(X_chunk), n), dtype=int)
     latencies_sub = np.empty(len(X_chunk), dtype=float)
 
-    for j, v in enumerate(X_chunk):
-        use_index_name = base_index_name
-        if index_count > 1:
-            idx = random.randrange(index_count) + 1
-            if idx > 1:
-                use_index_name = base_index_name + f"_i{idx}"
+    try:
+        for j, v in enumerate(X_chunk):
+            use_index_name = base_index_name
+            if index_count > 1:
+                idx = random.randrange(index_count) + 1
+                if idx > 1:
+                    use_index_name = base_index_name + f"_i{idx}"
 
-        t0 = time.perf_counter()
-        result = query_impl(
-            pool, database, use_stale_reads, use_index_name, metric, means_top_size, v, n)[0]
-        results_sub[j, :] = result
-        latencies_sub[j] = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            result = query_impl(
+                pool, database, use_stale_reads, use_index_name, metric, means_top_size, v, n)[0]
+            results_sub[j, :] = result
+            latencies_sub[j] = time.perf_counter() - t0
 
-    return results_sub, latencies_sub
+        return results_sub, latencies_sub
+    except Exception as e:
+        # Convert to a picklable exception for multiprocessing
+        raise RuntimeError(f"Sub-batch query failed at index {j}: {str(e)}") from None
 
 
 def get_backoff_wait_ms(retry_count):
