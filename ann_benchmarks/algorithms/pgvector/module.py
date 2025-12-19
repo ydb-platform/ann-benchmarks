@@ -110,7 +110,9 @@ def proc_execute_sub_batch(connect_kwargs,
                     results_sub[j, :] = np.fromiter((r[0] for r in rows), dtype=int, count=n)
                     latencies_sub[j]  = perf_counter() - t0
 
-        return results_sub, latencies_sub
+        # Record finish time right after all queries complete (use time.time() for cross-process compatibility)
+        finish_time = time.time()
+        return results_sub, latencies_sub, finish_time
     finally:
         conn.close()
 
@@ -471,6 +473,7 @@ class PGVector(BaseANN):
 
         # Create barrier for synchronization: num_workers + 1 (main thread)
         start_barrier = threading.Barrier(num_workers + 1)
+        finish_times = []
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self._batch_threads) as executor:
             future_to_range = {
@@ -486,21 +489,22 @@ class PGVector(BaseANN):
                 for (s, e) in ranges
             }
 
-            # Wait for all workers to be ready, then record start time
+            # Wait for all workers to be ready, then record start time (use time.time() for cross-process compatibility)
             start_barrier.wait()
-            start_time = perf_counter()
+            start_time = time.time()
 
             for future in concurrent.futures.as_completed(future_to_range):
                 s, e = future_to_range[future]
                 try:
-                    res_sub, lat_sub = future.result()
+                    res_sub, lat_sub, finish_time = future.result()
                     results[s:e, :] = res_sub
                     latencies[s:e]  = lat_sub
+                    finish_times.append(finish_time)
                 except Exception as exc:
                     print(f"exception in thread sub-batch ({s},{e}): {exc}")
 
-        # Record end time after all workers complete
-        end_time = perf_counter()
+        # Use the latest finish time from all workers
+        end_time = max(finish_times) if finish_times else time.time()
         self._precise_time = end_time - start_time
 
         self.results = results
@@ -531,6 +535,7 @@ class PGVector(BaseANN):
         # Create manager-based barrier for cross-process synchronization
         manager = ctx.Manager()
         start_barrier = manager.Barrier(num_workers + 1)
+        finish_times = []
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._batch_threads, mp_context=ctx) as ex:
             future_to_range = {
@@ -546,22 +551,23 @@ class PGVector(BaseANN):
                 for (s, e) in ranges
             }
 
-            # Wait for all workers to be ready, then record start time
+            # Wait for all workers to be ready, then record start time (use time.time() for cross-process compatibility)
             start_barrier.wait()
-            start_time = perf_counter()
+            start_time = time.time()
 
             for future in concurrent.futures.as_completed(future_to_range):
                 s, e = future_to_range[future]
                 try:
-                    res_sub, lat_sub = future.result()
+                    res_sub, lat_sub, finish_time = future.result()
                     results[s:e, :] = res_sub
                     latencies[s:e]  = lat_sub
+                    finish_times.append(finish_time)
                 except Exception as exc:
                     print(f"exception in sub-batch ({s},{e}): {exc}")
                     # raise  # optionally fail-fast
 
-        # Record end time after all workers complete
-        end_time = perf_counter()
+        # Use the latest finish time from all workers
+        end_time = max(finish_times) if finish_times else time.time()
         self._precise_time = end_time - start_time
 
         self.results = results

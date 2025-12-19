@@ -175,7 +175,9 @@ def proc_execute_sub_batch(database,
             results_sub[j, :] = result
             latencies_sub[j] = time.perf_counter() - t0
 
-        return results_sub, latencies_sub
+        # Record finish time right after all queries complete (use time.time() for cross-process compatibility)
+        finish_time = time.time()
+        return results_sub, latencies_sub, finish_time
     except Exception as e:
         # Convert to a picklable exception for multiprocessing
         raise RuntimeError(f"Sub-batch query failed at index {j}: {str(e)}") from None
@@ -658,6 +660,7 @@ class YDBVector(BaseANN):
         # Create manager-based barrier for cross-process synchronization
         manager = ctx.Manager()
         start_barrier = manager.Barrier(num_workers + 1)
+        finish_times = []
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._batch_threads, mp_context=ctx) as ex:
             future_to_range = {
@@ -676,22 +679,23 @@ class YDBVector(BaseANN):
                 for (s, e) in ranges
             }
 
-            # Wait for all workers to be ready, then record start time
+            # Wait for all workers to be ready, then record start time (use time.time() for cross-process compatibility)
             start_barrier.wait()
-            start_time = time.perf_counter()
+            start_time = time.time()
 
             for future in concurrent.futures.as_completed(future_to_range):
                 s, e = future_to_range[future]
                 try:
-                    res_sub, lat_sub = future.result()
+                    res_sub, lat_sub, finish_time = future.result()
                     results[s:e, :] = res_sub
                     latencies[s:e]  = lat_sub
+                    finish_times.append(finish_time)
                 except Exception as exc:
                     print(f"exception in sub-batch ({s},{e}): {exc}")
                     # raise  # optionally fail-fast
 
-        # Record end time after all workers complete
-        end_time = time.perf_counter()
+        # Use the latest finish time from all workers
+        end_time = max(finish_times) if finish_times else time.time()
         self._precise_time = end_time - start_time
 
         self.results = results
