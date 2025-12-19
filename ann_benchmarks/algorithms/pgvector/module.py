@@ -588,7 +588,7 @@ class PGVector(BaseANN):
         cur = self._conn.cursor()
         if cur is None:
             return 0
-        cur.execute("COALESCE(pg_indexes_size(to_regclass('public.items')), 0)")
+        cur.execute("SELECT COALESCE(pg_indexes_size(to_regclass('public.items')), 0)")
         return cur.fetchone()[0] / 1024
 
     def should_check_results(self):
