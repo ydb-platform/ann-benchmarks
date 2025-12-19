@@ -68,7 +68,8 @@ def proc_execute_sub_batch(connect_kwargs,
                            query_sql: str,
                            ef_search: int | None,
                            X_chunk: np.ndarray,  # THIS IS COPIED to the child
-                           n: int):
+                           n: int,
+                           start_barrier=None):
     """
     Executes queries for the rows in X_chunk and returns (results_sub, latencies_sub).
     """
@@ -84,6 +85,10 @@ def proc_execute_sub_batch(connect_kwargs,
         with conn.cursor() as cursor:
             if ef_search is not None and not USE_SELECT1:
                 cursor.execute(f"SET hnsw.ef_search = {ef_search}")
+
+            # Synchronization point: wait for all workers to be ready before starting
+            if start_barrier is not None:
+                start_barrier.wait()
 
             if USE_SELECT1:
                 # Fixed ids 0..n-1 for each query
@@ -275,6 +280,7 @@ class PGVector(BaseANN):
         self._method_param = method_param
         self._batch_threads = None
         self._pool = None
+        self._precise_time = None
 
         self._psycopg_connect_kwargs: Dict[str, Any] = dict(
             autocommit=True,
@@ -457,10 +463,14 @@ class PGVector(BaseANN):
 
         chunk = math.ceil(total / self._batch_threads)
         ranges = [(s, min(s + chunk, total)) for s in range(0, total, chunk)]
+        num_workers = len(ranges)
 
         connect_kwargs = dict(self._psycopg_connect_kwargs)
         query_sql = self._query
         ef_search = self._ef_search
+
+        # Create barrier for synchronization: num_workers + 1 (main thread)
+        start_barrier = threading.Barrier(num_workers + 1)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self._batch_threads) as executor:
             future_to_range = {
@@ -471,9 +481,14 @@ class PGVector(BaseANN):
                     ef_search,
                     X[s:e],      # copied slice to thread
                     n,
+                    start_barrier,
                 ): (s, e)
                 for (s, e) in ranges
             }
+
+            # Wait for all workers to be ready, then record start time
+            start_barrier.wait()
+            start_time = perf_counter()
 
             for future in concurrent.futures.as_completed(future_to_range):
                 s, e = future_to_range[future]
@@ -483,6 +498,10 @@ class PGVector(BaseANN):
                     latencies[s:e]  = lat_sub
                 except Exception as exc:
                     print(f"exception in thread sub-batch ({s},{e}): {exc}")
+
+        # Record end time after all workers complete
+        end_time = perf_counter()
+        self._precise_time = end_time - start_time
 
         self.results = results
         self.latencies = latencies
@@ -502,12 +521,17 @@ class PGVector(BaseANN):
 
         chunk = math.ceil(total / self._batch_threads)
         ranges = [(s, min(s + chunk, total)) for s in range(0, total, chunk)]
+        num_workers = len(ranges)
 
         connect_kwargs = dict(self._psycopg_connect_kwargs)  # each process connects independently
         query_sql = self._query
         ef_search = self._ef_search
 
         ctx = mp.get_context("spawn")
+        # Create manager-based barrier for cross-process synchronization
+        manager = ctx.Manager()
+        start_barrier = manager.Barrier(num_workers + 1)
+
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._batch_threads, mp_context=ctx) as ex:
             future_to_range = {
                 ex.submit(
@@ -517,9 +541,14 @@ class PGVector(BaseANN):
                     ef_search,
                     X[s:e],        # <-- sliced copy to child
                     n,
+                    start_barrier,
                 ): (s, e)
                 for (s, e) in ranges
             }
+
+            # Wait for all workers to be ready, then record start time
+            start_barrier.wait()
+            start_time = perf_counter()
 
             for future in concurrent.futures.as_completed(future_to_range):
                 s, e = future_to_range[future]
@@ -531,6 +560,10 @@ class PGVector(BaseANN):
                     print(f"exception in sub-batch ({s},{e}): {exc}")
                     # raise  # optionally fail-fast
 
+        # Record end time after all workers complete
+        end_time = perf_counter()
+        self._precise_time = end_time - start_time
+
         self.results = results
         self.latencies = latencies
 
@@ -539,6 +572,14 @@ class PGVector(BaseANN):
 
     def get_batch_latencies(self) -> np.array:
         return self.latencies
+
+    def get_precise_time(self) -> float:
+        """Return precise wall-clock time for batch query execution.
+
+        This time is measured from when all workers are synchronized and ready
+        to start until all workers have completed their queries.
+        """
+        return self._precise_time
 
     def set_query_arguments(self, ef_search, opts=None, **kwargs):
         # this will affect all new connections (i.e. from the pool)

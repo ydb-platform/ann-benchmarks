@@ -135,7 +135,8 @@ def proc_execute_sub_batch(database,
                            index_count,
                            means_top_size,
                            X_chunk: np.ndarray,  # THIS IS COPIED to the child
-                           n: int):
+                           n: int,
+                           start_barrier=None):
     """
     Executes queries for the rows in X_chunk and returns (results_sub, latencies_sub).
     """
@@ -155,6 +156,10 @@ def proc_execute_sub_batch(database,
 
     results_sub   = np.empty((len(X_chunk), n), dtype=int)
     latencies_sub = np.empty(len(X_chunk), dtype=float)
+
+    # Synchronization point: wait for all workers to be ready before starting
+    if start_barrier is not None:
+        start_barrier.wait()
 
     try:
         for j, v in enumerate(X_chunk):
@@ -519,6 +524,7 @@ class YDBVector(BaseANN):
         check_ydb_cli_available()
 
         self._batch_threads = None
+        self._precise_time = None
 
         self._metric = metric
         if method_param is None:
@@ -646,8 +652,13 @@ class YDBVector(BaseANN):
 
         chunk = math.ceil(total / self._batch_threads)
         ranges = [(s, min(s + chunk, total)) for s in range(0, total, chunk)]
+        num_workers = len(ranges)
 
         ctx = mp.get_context("spawn")
+        # Create manager-based barrier for cross-process synchronization
+        manager = ctx.Manager()
+        start_barrier = manager.Barrier(num_workers + 1)
+
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._batch_threads, mp_context=ctx) as ex:
             future_to_range = {
                 ex.submit(
@@ -660,9 +671,14 @@ class YDBVector(BaseANN):
                     self._means_top_size,
                     X[s:e],        # <-- sliced copy to child
                     n,
+                    start_barrier,
                 ): (s, e)
                 for (s, e) in ranges
             }
+
+            # Wait for all workers to be ready, then record start time
+            start_barrier.wait()
+            start_time = time.perf_counter()
 
             for future in concurrent.futures.as_completed(future_to_range):
                 s, e = future_to_range[future]
@@ -674,6 +690,10 @@ class YDBVector(BaseANN):
                     print(f"exception in sub-batch ({s},{e}): {exc}")
                     # raise  # optionally fail-fast
 
+        # Record end time after all workers complete
+        end_time = time.perf_counter()
+        self._precise_time = end_time - start_time
+
         self.results = results
         self.latencies = latencies
 
@@ -682,6 +702,14 @@ class YDBVector(BaseANN):
 
     def get_batch_latencies(self) -> np.array:
         return self.latencies
+
+    def get_precise_time(self) -> float:
+        """Return precise wall-clock time for batch query execution.
+
+        This time is measured from when all workers are synchronized and ready
+        to start until all workers have completed their queries.
+        """
+        return self._precise_time
 
     def set_query_arguments(self, means_top_size, opts=None, **kwargs):
         self._means_top_size = means_top_size
