@@ -57,7 +57,7 @@ def check_for_duplicates(candidates: list, search_vector: numpy.array, count: in
         f"  Total candidates: {len(candidates)}\n"
         f"  Unique candidates: {len(set(candidates))}\n"
         f"  Duplicate vector IDs: {duplicates}\n"
-        f"  Search vector (first 10 dims): {search_vector[:10] if len(search_vector) > 10 else search_vector}\n"
+        f"  Search vector: {search_vector}\n"
         f"  Requested count: {count}"
     )
 
