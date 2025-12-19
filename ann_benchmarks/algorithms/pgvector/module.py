@@ -86,6 +86,12 @@ def proc_execute_sub_batch(connect_kwargs,
             if ef_search is not None and not USE_SELECT1:
                 cursor.execute(f"SET hnsw.ef_search = {ef_search}")
 
+            # Warmup: prepare the statement before timing starts using a dummy zero vector
+            if not USE_SELECT1 and len(X_chunk) > 0:
+                warmup_vector = np.zeros(X_chunk.shape[1], dtype=X_chunk.dtype)
+                cursor.execute(query_sql, (warmup_vector, n), binary=True, prepare=True)
+                cursor.fetchall()  # consume result
+
             # Synchronization point: wait for all workers to be ready before starting
             if start_barrier is not None:
                 start_barrier.wait()
