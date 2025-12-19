@@ -28,6 +28,7 @@ import math
 import multiprocessing as mp
 import numpy as np
 import os
+import random
 import subprocess
 import sys
 import threading
@@ -59,6 +60,10 @@ METRIC_PROPERTIES = {
 }
 
 MAX_BATCH_QUERY_THREADS = 128
+
+# ideally it should depend on test size and thread number
+# (i.e. expected test duration)
+MAX_START_JITTER_MS = 50
 
 USE_SELECT1 = False
 USE_MP = True
@@ -95,6 +100,8 @@ def proc_execute_sub_batch(connect_kwargs,
             # Synchronization point: wait for all workers to be ready before starting
             if start_barrier is not None:
                 start_barrier.wait()
+                # Add random jitter to avoid thundering herd
+                time.sleep(random.randint(1, MAX_START_JITTER_MS) / 1000.0)
 
             if USE_SELECT1:
                 # Fixed ids 0..n-1 for each query

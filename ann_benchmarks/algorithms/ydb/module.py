@@ -46,6 +46,10 @@ READ_REPLICAS_DEFAULT_COUNT = 0
 
 MAX_BATCH_QUERY_THREADS = 32
 
+# ideally it should depend on test size and thread number
+# (i.e. expected test duration)
+MAX_START_JITTER_MS = 50
+
 
 def query_impl(pool, database, use_stale_reads, index_name, metric, means_top_size, v, n):
     start = time.perf_counter()
@@ -160,6 +164,8 @@ def proc_execute_sub_batch(database,
     # Synchronization point: wait for all workers to be ready before starting
     if start_barrier is not None:
         start_barrier.wait()
+        # Add random jitter to avoid thundering herd
+        time.sleep(random.randint(1, MAX_START_JITTER_MS) / 1000.0)
 
     try:
         for j, v in enumerate(X_chunk):
