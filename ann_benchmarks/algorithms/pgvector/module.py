@@ -47,6 +47,9 @@ from ...util import get_bool_env_var
 from time import perf_counter
 
 
+DEFAULT_TABLE_NAME = "items"
+TABLE_NAME = os.environ.get("ANN_TABLE", DEFAULT_TABLE_NAME)
+
 METRIC_PROPERTIES = {
     "angular": {
         "distance_operator": "<=>",
@@ -337,9 +340,9 @@ class PGVector(BaseANN):
         self.configure_connection(self._conn)
 
         if metric == "angular":
-            self._query = "SELECT id FROM items ORDER BY embedding <=> %s LIMIT %s"
+            self._query = f"SELECT id FROM {TABLE_NAME} ORDER BY embedding <=> %s LIMIT %s"
         elif metric == "euclidean":
-            self._query = "SELECT id FROM items ORDER BY embedding <-> %s LIMIT %s"
+            self._query = f"SELECT id FROM {TABLE_NAME} ORDER BY embedding <-> %s LIMIT %s"
         else:
             raise RuntimeError(f"unknown metric {metric}")
 
@@ -378,14 +381,14 @@ class PGVector(BaseANN):
 
     def fit(self, X):
         cur = self._conn.cursor()
-        cur.execute("DROP TABLE IF EXISTS items")
-        cur.execute("CREATE TABLE items (id int, embedding vector(%d))" % X.shape[1])
-        cur.execute("ALTER TABLE items ALTER COLUMN embedding SET STORAGE PLAIN")
+        cur.execute(f"DROP TABLE IF EXISTS {TABLE_NAME}")
+        cur.execute(f"CREATE TABLE {TABLE_NAME} (id int, embedding vector(%d))" % X.shape[1])
+        cur.execute(f"ALTER TABLE {TABLE_NAME} ALTER COLUMN embedding SET STORAGE PLAIN")
         print("copying data...")
         sys.stdout.flush()
         num_rows = 0
         insert_start_time_sec = time.time()
-        with cur.copy("COPY items (id, embedding) FROM STDIN WITH (FORMAT BINARY)") as copy:
+        with cur.copy(f"COPY {TABLE_NAME} (id, embedding) FROM STDIN WITH (FORMAT BINARY)") as copy:
             copy.set_types(["int4", "vector"])
             for i, embedding in enumerate(X):
                 copy.write_row((i, embedding))
@@ -397,7 +400,7 @@ class PGVector(BaseANN):
         print("creating index...")
         sys.stdout.flush()
         create_index_str = \
-            "CREATE INDEX ON items USING hnsw (embedding vector_%s_ops) " \
+            f"CREATE INDEX ON {TABLE_NAME} USING hnsw (embedding vector_%s_ops) " \
             "WITH (m = %d, ef_construction = %d)" % (
                 self.get_metric_properties()["ops_type"],
                 self._m,
@@ -656,7 +659,7 @@ class PGVector(BaseANN):
         cur = self._conn.cursor()
         if cur is None:
             return 0
-        cur.execute("SELECT COALESCE(pg_indexes_size(to_regclass('public.items')), 0)")
+        cur.execute(f"SELECT COALESCE(pg_indexes_size(to_regclass('public.{TABLE_NAME}')), 0)")
         return cur.fetchone()[0] / 1024
 
     def should_check_results(self):

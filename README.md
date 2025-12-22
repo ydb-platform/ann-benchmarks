@@ -50,6 +50,8 @@ Configuration is stored in `ann_benchmarks/algorithms/{ydb,pgvector}/{config.yml
 
 If you run with `--batch` option, benchmark will use `config_batch.yml`, otherwise `config.yml`.
 
+By default table `items` is used. To overwrite it, please use `ANN_TABLE` env variable.
+
 # Prebuild datasets
 
 Building 100M wikipedia dataset requires 900 GiB of RAM. Thus, some prebuild datasets can be located [here](https://storage.yandexcloud.net/ann-data). Just download datasets to the data subfolder.
@@ -85,8 +87,6 @@ export YDB_CONNECTION_STRING="grpc://<HOST>:2135/?database=/Root/db1"
 
 python3 -u run.py [--skip-dataload] --algorithm ydb --dataset cohere-wikipedia-22-12-10M-angular --local [--batch]
 ```
-
-By default table `item` is used. To overwrite it, please use YDB_ANN_TABLE env variable.
 
 To allow stale reads (followers / read replicas), please set read_replicas argument.
 

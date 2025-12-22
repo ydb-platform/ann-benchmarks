@@ -30,7 +30,7 @@ from ..base.module import BaseANN
 
 
 DEFAULT_TABLE_NAME = "items"
-TABLE_NAME = os.environ.get("YDB_ANN_TABLE", DEFAULT_TABLE_NAME)
+TABLE_NAME = os.environ.get("ANN_TABLE", DEFAULT_TABLE_NAME)
 INDEX_BASE_NAME = f"idx_vector_{DEFAULT_TABLE_NAME}"
 
 MIN_SHARDS = 100
