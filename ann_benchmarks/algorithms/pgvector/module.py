@@ -471,6 +471,7 @@ class PGVector(BaseANN):
 
     def batch_query_thread_pool(self, X: np.ndarray, n: int) -> None:
         print(f"Batching queries in {self._batch_threads} threads (via ThreadPool), ef_search={self._ef_search}, dummy={USE_SELECT1}")
+        total_start = time.time()
 
         total = len(X)
         results  = np.empty((total, n), dtype=int)
@@ -520,12 +521,16 @@ class PGVector(BaseANN):
         end_time = max(finish_times) if finish_times else time.time()
         self._precise_time = end_time - start_time
 
+        total_time = time.time() - total_start
+        print(f"batch execution total time: {total_time:.3f}s, pure time (after barrier): {self._precise_time:.3f}s")
+
         self.results = results
         self.latencies = latencies
 
     def batch_query_mp(self, X: np.ndarray, n: int) -> None:
         self._batch_threads = min(self._batch_threads, max(1, len(X)))
         print(f"Batching queries in {self._batch_threads} processes, ef_search={self._ef_search}, dummy={USE_SELECT1}")
+        total_start = time.time()
 
         try:
             mp.set_start_method("spawn", force=False)
@@ -582,6 +587,9 @@ class PGVector(BaseANN):
         # Use the latest finish time from all workers
         end_time = max(finish_times) if finish_times else time.time()
         self._precise_time = end_time - start_time
+
+        total_time = time.time() - total_start
+        print(f"batch execution total time: {total_time:.3f}s, pure time (after barrier): {self._precise_time:.3f}s")
 
         self.results = results
         self.latencies = latencies
