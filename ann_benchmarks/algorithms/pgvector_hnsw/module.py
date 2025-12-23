@@ -26,9 +26,9 @@ CONNECTION_SETTINGS = [
     "set jit = 'off';",
 ]
 
-MAX_DB_CONNECTIONS = 16
+MAX_DB_CONNECTIONS = 128
 MAX_CREATE_INDEX_THREADS = 16
-MAX_BATCH_QUERY_THREADS = 16
+MAX_BATCH_QUERY_THREADS = 128
 EMBEDDINGS_PER_COPY_BATCH = 5_000 # how many rows per COPY statement
 START_TIME = datetime(2000, 1, 1, tzinfo=timezone.utc) # minimum time used for time column
 CHUNK_TIME_STEP = timedelta(days=1) # how much to increment the time column by for each chunk
@@ -44,7 +44,6 @@ class PGVectorHNSW(BaseANN):
         self._m: int = m
         self._ef_construction: int = ef_construction
         self._ef_search: Optional[int] = None
-        self._query_shared_buffers = 0
         self._pool : ConnectionPool = None
         if metric == "angular":
             self._query: str = QUERY
@@ -81,24 +80,6 @@ class PGVectorHNSW(BaseANN):
             cur.execute("select count(*) from pg_class where relname = 'items'")
             table_count = cur.fetchone()[0]
         return table_count > 0
-
-    def shared_buffers(self, conn: psycopg.Connection) -> bool:
-        shared_buffers = 0
-        with conn.cursor() as cur:
-            sql_query = QUERY % ("$1", "$2")
-            cur.execute(f"""
-                        select 
-                            shared_blks_hit + shared_blks_read
-                        from pg_stat_statements
-                        where queryid = (select queryid
-                        from pg_stat_statements
-                        where userid = (select oid from pg_authid where rolname = current_role)
-                        and query like '{sql_query}'
-                        );""")
-            res = cur.fetchone()
-            if res is not None:
-                shared_buffers = res[0]
-        return shared_buffers
 
     def create_table(self, conn: psycopg.Connection, dimensions: int) -> None:
         with conn.cursor() as cur:
@@ -207,7 +188,7 @@ class PGVectorHNSW(BaseANN):
     def index_table(self) -> None:
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"""create index on only public.items using hnsw (embedding vector_cosine_ops) 
+                cur.execute(f"""create index on only public.items using hnsw (embedding vector_cosine_ops)
                    with (m = {self._m}, ef_construction = {self._ef_construction})"""
                 )
                 conn.commit()
@@ -216,7 +197,7 @@ class PGVectorHNSW(BaseANN):
         try:
             with self._pool.connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(f"""create index on only {chunk} using hnsw (embedding vector_cosine_ops) 
+                    cur.execute(f"""create index on only {chunk} using hnsw (embedding vector_cosine_ops)
                         with (m = {self._m}, ef_construction = {self._ef_construction})"""
                     )
                     conn.commit()
@@ -275,8 +256,9 @@ class PGVectorHNSW(BaseANN):
     def set_query_arguments(self, ef_search):
         self._ef_search = ef_search
         #close and restart the pool to apply the new settings
-        self._pool.close()
-        self._pool = None
+        if self._pool:
+            self._pool.close()
+            self._pool = None
         self.start_pool()
 
     def get_memory_usage(self) -> Optional[float]:
@@ -294,9 +276,6 @@ class PGVectorHNSW(BaseANN):
     def batch_query(self, X: numpy.array, n: int) -> None:
         threads = min(MAX_BATCH_QUERY_THREADS, X.size)
 
-        with self._pool.connection() as conn:
-            shared_buffers_start = self.shared_buffers(conn)
-
         results = numpy.empty((X.shape[0], n), dtype=int)
         latencies = numpy.empty(X.shape[0], dtype=float)
         with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
@@ -311,14 +290,6 @@ class PGVectorHNSW(BaseANN):
                     print(f"exception getting batch results: {x2}")
         self.results = results
         self.latencies = latencies
-
-        with self._pool.connection() as conn:
-            shared_buffers_end = self.shared_buffers(conn)
-
-        self._query_shared_buffers = shared_buffers_end - shared_buffers_start
-
-    def get_additional(self):
-        return {"shared_buffers": self._query_shared_buffers}
 
     def get_batch_results(self) -> numpy.array:
         return self.results

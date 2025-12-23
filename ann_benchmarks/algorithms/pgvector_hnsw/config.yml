@@ -9,8 +9,8 @@ float:
     run_groups:
       pgvector_hnsw1:
         args: [
-            ["postgres://ann:ann@localhost:5432/ann"],
-            [16], # m
-            [64], # ef_construction
+            ["postgres://vec@localhost:5432/vec"],
+            [24], # m
+            [200], # ef_construction
           ]
-        query_args: [[100]] # ef_search
+        query_args: [[10, 15, 20]] # ef_search
