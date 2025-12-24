@@ -172,7 +172,9 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
             (results, wall_time) = batch_query(X_test, skip_duplicate_check)
             # Use precise time measurement if algorithm provides it
             if hasattr(algo, "get_precise_time"):
-                wall_time = algo.get_precise_time()
+                precise_wall_time = algo.get_precise_time()
+                if precise_wall_time:
+                    wall_time = algo.get_precise_time()
         else:
             results = [single_query(x, skip_duplicate_check) for x in X_test]
             wall_time = sum(time for time, _ in results)

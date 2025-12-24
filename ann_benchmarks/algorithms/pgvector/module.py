@@ -70,6 +70,7 @@ MAX_START_JITTER_MS = 50
 
 USE_SELECT1 = False
 USE_MP = True
+USE_NAIVE_THREADING = False
 
 
 def proc_execute_sub_batch(connect_kwargs,
@@ -104,7 +105,8 @@ def proc_execute_sub_batch(connect_kwargs,
             if start_barrier is not None:
                 start_barrier.wait()
                 # Add random jitter to avoid thundering herd
-                time.sleep(random.randint(1, MAX_START_JITTER_MS) / 1000.0)
+                if MAX_START_JITTER_MS != 0:
+                    time.sleep(random.randint(1, MAX_START_JITTER_MS) / 1000.0)
 
             if USE_SELECT1:
                 # Fixed ids 0..n-1 for each query
@@ -447,7 +449,9 @@ class PGVector(BaseANN):
     def batch_query(self, X: np.array, n: int) -> None:
         self._batch_threads = min(self._batch_threads, max(1, len(X)))
 
-        if USE_MP:
+        if USE_NAIVE_THREADING:
+            self.batch_query_thread_pool_naive(X, n)
+        elif USE_MP:
             self.batch_query_mp(X, n)
         else:
             self.batch_query_thread_pool(X, n)
