@@ -119,6 +119,13 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
                 [(int(idx), float(metrics[distance].distance(v, X_train[idx]))) for idx in single_results]  # noqa
                 for v, single_results in zip(X, results)
             ]
+
+            # algorithm can measure wall time with higher accuracy
+            if hasattr(algo, "get_precise_time"):
+                precise_wall_time = algo.get_precise_time()
+                if precise_wall_time:
+                    total = precise_wall_time
+
             return ([(latency, v) for latency, v in zip(batch_latencies, candidates)], total)
 
         if batch:
