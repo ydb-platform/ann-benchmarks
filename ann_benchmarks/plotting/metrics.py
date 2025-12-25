@@ -71,7 +71,8 @@ def queries_per_second(queries, attrs):
     if "best_qps" in attrs:
         return attrs["best_qps"]
     else:
-        # backward compatibility with older results
+        # backward compatibility with older results,
+        # incorrect when queries run in parallel
         return 1.0 / attrs["best_search_time"]
 
 
