@@ -33,6 +33,8 @@ DEFAULT_TABLE_NAME = "items"
 TABLE_NAME = os.environ.get("ANN_TABLE", DEFAULT_TABLE_NAME)
 INDEX_BASE_NAME = f"idx_vector_{DEFAULT_TABLE_NAME}"
 
+NO_VIEW = os.environ.get("YDB_NO_VIEW", "").lower() in ("1", "true", "yes")
+
 MIN_SHARDS = 100
 
 BATCH_SIZE = 1000
@@ -63,6 +65,8 @@ def query_impl(pool, database, use_stale_reads, index_name, metric, means_top_si
         print(f"Unsupported metric: {metric}", file=sys.stderr)
         sys.exit(1)
 
+    view_clause = "" if NO_VIEW else f"VIEW `{index_name}`"
+
     query = f"""
         PRAGMA TablePathPrefix("{database}");
 
@@ -72,7 +76,7 @@ def query_impl(pool, database, use_stale_reads, index_name, metric, means_top_si
 
         SELECT id, {distance_func}(embedding, $embedding) as dist
         FROM `{TABLE_NAME}`
-        VIEW `{index_name}`
+        {view_clause}
         ORDER BY dist ASC
         LIMIT {n};
     """
