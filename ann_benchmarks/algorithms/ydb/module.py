@@ -66,11 +66,12 @@ def query_impl(pool, database, use_stale_reads, index_name, metric, means_top_si
         sys.exit(1)
 
     view_clause = "" if NO_VIEW else f"VIEW `{index_name}`"
+    pragma_clause = "" if NO_VIEW else f"pragma ydb.KMeansTreeSearchTopSize = `{means_top_size}`;"
 
     query = f"""
         PRAGMA TablePathPrefix("{database}");
 
-        pragma ydb.KMeansTreeSearchTopSize = "{means_top_size}";
+        {pragma_clause}
 
         DECLARE $embedding as String;
 
