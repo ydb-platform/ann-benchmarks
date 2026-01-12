@@ -40,7 +40,7 @@ def run_individual_query(algo: BaseANN, X_train: numpy.array, X_test: numpy.arra
     )
 
     best_search_time = float("inf")
-    best_qps = float("inf")
+    best_qps = 0
     for i in range(run_count):
         print("Run %d/%d..." % (i + 1, run_count))
         # a bit dumb but can't be a scalar since of Python's scoping rules
